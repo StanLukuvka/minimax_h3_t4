@@ -92,8 +92,12 @@ class H3T4Worker:
             raise TypeError(f"Expected MiniMaxH3 checkpoint, detected {type(model).__name__}")
         load_device = comfy.model_management.get_torch_device()
         offload_device = comfy.model_management.unet_offload_device()
-        patcher = comfy.model_patcher.ModelPatcher(model, load_device, offload_device)
         model.load_model_weights(state_dict, "", assign=True)
+        local_model_size = max(1, comfy.model_management.module_size(model) // 2)
+        from .patcher import h3_fsdp_patcher_class
+
+        patcher_class = h3_fsdp_patcher_class(comfy.model_patcher.ModelPatcher)
+        patcher = patcher_class(model, load_device, offload_device, size=local_model_size)
         full_state = patcher.model_state_dict(filter_prefix="diffusion_model.")
         diffusion = model.diffusion_model
         diffusion.to("meta")
