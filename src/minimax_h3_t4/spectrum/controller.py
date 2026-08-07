@@ -10,13 +10,7 @@ import torch
 from .adapter import SpectrumStepAdapter
 from .config import SpectrumConfig
 from .runtime import SpectrumRuntime, SpectrumStats
-
-
-def spectrum_sampler_is_safe(sampler: Any) -> bool:
-    function = getattr(sampler, "sampler_function", None)
-    name = getattr(function, "__name__", "")
-    options = getattr(sampler, "extra_options", {})
-    return name == "sample_res_multistep" and isinstance(options, dict) and "noise_sampler" not in options
+from .sampling import spectrum_sampler_policy
 
 
 class SpectrumController:
@@ -25,6 +19,7 @@ class SpectrumController:
     def __init__(self, config: SpectrumConfig) -> None:
         self.runtime = SpectrumRuntime(config)
         self.adapter = SpectrumStepAdapter(self.runtime)
+        self._run_bypass = False
 
     def start_run(self, sigmas: torch.Tensor, *, sampler: Any | None = None) -> None:
         valid = True
@@ -35,8 +30,23 @@ class SpectrumController:
         if not self.adapter.sync_all(valid):
             self.runtime.abort_run("Spectrum run initialization failed on one or more ranks")
             raise RuntimeError("Spectrum run initialization failed on one or more ranks")
-        if sampler is not None and not self.adapter.sync_all(spectrum_sampler_is_safe(sampler)):
+
+        policy = spectrum_sampler_policy(sampler) if sampler is not None else None
+        policy_valid = policy is not None
+        if not self.adapter.sync_all(policy_valid):
+            self._run_bypass = True
             self.runtime.disable_for_run("sampler is not safe for Spectrum forecasting")
+            return
+        self._run_bypass = False
+        assert policy is not None  # unanimous admission includes this rank
+        policy_applied = True
+        try:
+            self.runtime.apply_sampler_policy(policy)
+        except (RuntimeError, ValueError, TypeError):
+            policy_applied = False
+        if not self.adapter.sync_all(policy_applied):
+            self.runtime.abort_run("Spectrum sampler policy failed on one or more ranks")
+            raise RuntimeError("Spectrum sampler policy failed on one or more ranks")
 
     def execute_h3_stack(
         self,
@@ -46,6 +56,8 @@ class SpectrumController:
         topology: tuple[Any, ...],
         exact: Callable[[], torch.Tensor],
     ) -> torch.Tensor:
+        if self._run_bypass:
+            return exact()
         try:
             decision = self.adapter.begin_step(timestep, topology=topology)
             if not decision.actual:
@@ -69,6 +81,9 @@ class SpectrumController:
             raise
 
     def end_run(self) -> SpectrumStats:
+        if self._run_bypass:
+            self._run_bypass = False
+            return self.runtime.end_run()
         stats: SpectrumStats | None = None
         valid = True
         try:

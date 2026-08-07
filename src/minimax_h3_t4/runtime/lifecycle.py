@@ -159,4 +159,15 @@ class H3T4ActorGroup:
 
         self.alive = False
         remaining = max(0.0, deadline - time.monotonic())
-        _run_bounded(self.ray_module.shutdown, remaining, "ray shutdown")
+        cluster_failure: BaseException | None = None
+        try:
+            _run_bounded(self.ray_module.shutdown, remaining, "ray shutdown")
+        except BaseException as exc:
+            cluster_failure = exc
+
+        if graceful_failure is not None:
+            if cluster_failure is not None:
+                graceful_failure.add_note(f"Secondary Ray shutdown failure: {type(cluster_failure).__name__}: {cluster_failure}")
+            raise graceful_failure
+        if cluster_failure is not None:
+            raise cluster_failure

@@ -20,7 +20,12 @@ def _controller() -> SpectrumController:
             flex_window=0.0,
         )
     )
-    controller.start_run(torch.linspace(1.0, 0.0, 5))
+
+    def sample_euler():
+        return None
+
+    sampler = type("Sampler", (), {"sampler_function": sample_euler, "extra_options": {}})()
+    controller.start_run(torch.linspace(1.0, 0.0, 5), sampler=sampler)
     return controller
 
 
@@ -87,6 +92,8 @@ def test_noise_or_ancestry_sampler_fails_closed_to_exact_execution() -> None:
 
     sampler = type("Sampler", (), {"sampler_function": sample_res_multistep_ancestral, "extra_options": {}})()
     controller.start_run(torch.linspace(1.0, 0.0, 3), sampler=sampler)
+    controller.adapter.sync_all = lambda _value: (_ for _ in ()).throw(AssertionError("unexpected Spectrum sync"))
+    controller.adapter.sync_mode = lambda _value: (_ for _ in ()).throw(AssertionError("unexpected Spectrum sync"))
     calls = 0
 
     def exact() -> torch.Tensor:

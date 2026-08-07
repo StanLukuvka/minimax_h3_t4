@@ -50,6 +50,8 @@ class H3T4Spectrum:
         debug: bool,
     ) -> tuple[H3T4ActorGroup]:
         model.require_alive()
+        if not enabled:
+            return (model,)
         config = SpectrumConfig(
             enabled=enabled,
             blend_weight=blend_weight,

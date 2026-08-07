@@ -15,6 +15,7 @@ import torch
 
 from .config import SpectrumConfig
 from .forecast import HistoryWeightForecaster
+from .sampling import SpectrumSamplerPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,8 @@ class SpectrumRuntime:
         self._sigma_max = 1.0
         self._current_window = float(config.window_size)
         self._consecutive_forecasts = 0
+        self._tail_actual_steps = int(config.tail_actual_steps)
+        self._maximum_consecutive_forecasts = 1
         self._topology: tuple[Any, ...] | None = None
 
     @property
@@ -70,7 +73,15 @@ class SpectrumRuntime:
         self._sigma_max = float(values.max().item())
         self._current_window = float(self.config.window_size)
         self._consecutive_forecasts = 0
+        self._tail_actual_steps = int(self.config.tail_actual_steps)
+        self._maximum_consecutive_forecasts = 1
         self._topology = None
+
+    def apply_sampler_policy(self, policy: SpectrumSamplerPolicy) -> None:
+        if not self._active or self._step is not None:
+            raise RuntimeError("sampler policy must be applied before the first Spectrum step")
+        self._tail_actual_steps = max(int(self.config.tail_actual_steps), policy.minimum_tail_actual_steps)
+        self._maximum_consecutive_forecasts = int(policy.maximum_consecutive_forecasts)
 
     def end_run(self) -> SpectrumStats:
         if self._step is not None:
@@ -97,12 +108,10 @@ class SpectrumRuntime:
     def check_topology(self, topology: tuple[Any, ...]) -> bool:
         normalized = tuple(topology)
         if self._topology is None:
-            self._topology = normalized
             return True
         if normalized == self._topology:
             return True
         self.disable_for_run("packed H3 topology changed")
-        self._topology = normalized
         return False
 
     def fail_closed_step(self, timestep: torch.Tensor | float, reason: str) -> StepDecision:
@@ -142,7 +151,7 @@ class SpectrumRuntime:
         if self._next_step >= self.stats.total_steps:
             raise RuntimeError("H3 call count exceeded the supplied sigma schedule")
         step_id = self._next_step
-        tail_start = max(0, self.stats.total_steps - self.config.tail_actual_steps)
+        tail_start = max(0, self.stats.total_steps - self._tail_actual_steps)
         if not self.config.enabled:
             actual, reason = True, "disabled"
         elif self.stats.disabled:
@@ -155,7 +164,9 @@ class SpectrumRuntime:
             actual, reason = True, "insufficient actual history"
         else:
             interval = max(1, math.floor(self._current_window))
-            actual = ((self._consecutive_forecasts + 1) % interval) == 0
+            actual = self._consecutive_forecasts >= self._maximum_consecutive_forecasts
+            if not actual:
+                actual = ((self._consecutive_forecasts + 1) % interval) == 0
             reason = "adaptive recompute" if actual else "adaptive forecast"
         self._step = StepDecision(step_id, self._coordinate(timestep), actual, reason)
         self._next_step += 1

@@ -179,6 +179,49 @@ def test_actor_group_refuses_success_when_worker_death_is_unconfirmed() -> None:
     assert group.alive is True
 
 
+def test_confirmed_force_kill_still_surfaces_graceful_shutdown_failure() -> None:
+    events: list[str] = []
+
+    class Ray:
+        class exceptions:
+            class RayActorError(RuntimeError):
+                pass
+
+        @staticmethod
+        def wait(refs, *, num_returns, timeout):
+            return refs, []
+
+        @staticmethod
+        def get(ref):
+            if ref == "ready":
+                raise Ray.exceptions.RayActorError("actor exited")
+            return True
+
+        @staticmethod
+        def kill(_worker, *, no_restart):
+            events.append("kill")
+
+        @staticmethod
+        def shutdown():
+            events.append("shutdown")
+
+    class Method:
+        def __init__(self, ref: str) -> None:
+            self.ref = ref
+
+        def remote(self):
+            return self.ref
+
+    worker = types.SimpleNamespace(shutdown=Method("graceful"), __ray_ready__=Method("ready"))
+    group = H3T4ActorGroup([worker], Ray(), ExactH3T4Topology())
+
+    with pytest.raises(RuntimeError, match="returned without terminating"):
+        group.close(timeout_seconds=3.0)
+
+    assert group.alive is False
+    assert events == ["kill", "shutdown"]
+
+
 def test_actor_group_releases_workers_and_ray_resources_boundedly() -> None:
     events: list[object] = []
 

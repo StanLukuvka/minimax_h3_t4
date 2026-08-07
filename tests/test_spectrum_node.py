@@ -52,6 +52,32 @@ def test_spectrum_node_configures_both_workers_with_system_ram_history() -> None
     assert all(config["history_storage"] == "system_ram" for _rank, config in configured)
 
 
+def test_disabled_spectrum_is_a_true_node_bypass_before_validation_or_rpc() -> None:
+    configured: list[tuple[int, dict]] = []
+    group = H3T4ActorGroup(
+        workers=[FakeWorker(0, configured), FakeWorker(1, configured)],
+        ray_module=FakeRay(),
+        topology=ExactH3T4Topology(),
+    )
+
+    (result,) = H3T4Spectrum().configure(
+        group,
+        enabled=False,
+        blend_weight=float("nan"),
+        degree=0,
+        ridge_lambda=-1.0,
+        window_size=0.0,
+        flex_window=-1.0,
+        warmup_steps=-1,
+        tail_actual_steps=-1,
+        max_history=0,
+        debug=False,
+    )
+
+    assert result is group
+    assert configured == []
+
+
 def test_spectrum_config_rejects_vram_history() -> None:
     try:
         SpectrumConfig(history_storage="vram").validate()

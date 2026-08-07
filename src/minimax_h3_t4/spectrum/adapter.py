@@ -87,10 +87,17 @@ class SpectrumStepAdapter:
         except (RuntimeError, ValueError, TypeError):
             decision_valid = False
         if not self.sync_all(decision_valid):
-            decision = self.runtime.fail_closed_step(
-                timestep,
-                "Spectrum step initialization failed on one or more ranks",
-            )
+            fallback_valid = True
+            try:
+                decision = self.runtime.fail_closed_step(
+                    timestep,
+                    "Spectrum step initialization failed on one or more ranks",
+                )
+            except (RuntimeError, ValueError, TypeError):
+                fallback_valid = False
+            if not self.sync_all(fallback_valid):
+                self.runtime.abort_run("Spectrum step fallback failed on one or more ranks")
+                raise RuntimeError("Spectrum step fallback failed on one or more ranks")
         if decision is None:  # pragma: no cover - defensive invariant
             raise RuntimeError("Spectrum runtime did not produce a step decision")
         any_actual = self.sync_mode(decision.actual)

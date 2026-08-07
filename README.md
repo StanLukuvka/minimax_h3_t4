@@ -35,6 +35,8 @@ The extension registers six focused nodes:
 
 Stock ComfyUI nodes remain responsible for CLIP loading, `MiniMaxH3ImageToVideo`, sampler selection, VAE loading and decoding, and video output.
 
+Spectrum forecasting is admitted only for the frozen, reviewed `sample_euler`, `sample_res_multistep`, and `sample_res_multistep_cfg_pp` functions. Ancestral samplers, Euler with positive or invalid `s_churn`, aliases, and custom samplers execute exactly. Forecasts never occur consecutively; RES samplers enforce at least three final exact steps.
+
 ## Installation
 
 Clone the repository into ComfyUI's `custom_nodes` directory and install its Python dependencies with the same Python environment used by ComfyUI:
