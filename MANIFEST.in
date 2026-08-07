@@ -1,10 +1,10 @@
 include LICENSE
+include NOTICE.md
 include README.md
+include SCAFFOLD.md
 
+recursive-include notebooks *.py
+recursive-include workflows *.json
+recursive-include web/docs *.md
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
-
-recursive-include docs *.rst conf.py Makefile make.bat *.jpg *.png *.gif
-recursive-include web/docs *.md
-
-

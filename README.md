@@ -69,6 +69,14 @@ Sampler -> parent-process VAE decode -> video output
 
 This dependency ordering ensures that the large conditioning model and conditioning-time VAE finish before the two denoiser workers begin sequential checkpoint loading.
 
+## Included workflows and Kaggle entry
+
+- `workflows/minimax_h3_t4_exact.json` — immutable exact control path.
+- `workflows/minimax_h3_t4_spectrum.json` — native Spectrum path with the conservative defaults below.
+- `notebooks/kaggle_install.py` — checks for exactly two T4 GPUs, installs pinned ComfyUI/runtime dependencies, links attached model datasets, installs both workflows, and starts ComfyUI.
+
+The Kaggle entry defaults to the proven ComfyUI commit. Before publishing a reproducible notebook, set `H3_T4_EXTENSION_REF` to a full release commit rather than `main`.
+
 ## Spectrum defaults
 
 The defaults reproduce the proven conservative configuration:
