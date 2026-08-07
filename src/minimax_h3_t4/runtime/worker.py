@@ -225,8 +225,17 @@ class H3T4Worker:
         import torch
         import torch.distributed as dist
 
+        patcher = self.model
         self.model = None
         self.spectrum_controller = None
+        if patcher is not None:
+            base_model = getattr(patcher, "model", None)
+            if base_model is not None and hasattr(base_model, "current_patcher"):
+                base_model.current_patcher = None
+            try:
+                patcher.cleanup()
+            except Exception:
+                pass
         gc.collect()
         torch.cuda.empty_cache()
         if dist.is_initialized():
