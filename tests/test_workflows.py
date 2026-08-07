@@ -78,6 +78,13 @@ def validate_links(graph) -> None:
                 assert link["origin_slot"] == slot
 
 
+def test_packaged_workflows_match_git_clone_workflows() -> None:
+    root = Path(__file__).parents[1]
+    for source in WORKFLOWS.glob("*.json"):
+        packaged = root / "src" / "minimax_h3_t4" / "workflows" / source.name
+        assert packaged.read_bytes() == source.read_bytes()
+
+
 @pytest.mark.parametrize(
     ("filename", "spectrum"),
     (("minimax_h3_t4_exact.json", False), ("minimax_h3_t4_spectrum.json", True)),

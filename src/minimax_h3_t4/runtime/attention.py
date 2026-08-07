@@ -1,3 +1,8 @@
+"""Fixed MiniMax-H3 Ulysses attention setup.
+
+Apache-2.0 donor provenance is recorded in NOTICE.md.
+"""
+
 from __future__ import annotations
 
 

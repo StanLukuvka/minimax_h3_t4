@@ -1,4 +1,7 @@
-"""Minimal ComfyUI ModelPatcher policy for an already-sharded H3 model."""
+"""Minimal ComfyUI ModelPatcher policy for an already-sharded H3 model.
+
+Apache-2.0 donor provenance is recorded in NOTICE.md.
+"""
 
 from __future__ import annotations
 

@@ -1,0 +1,1 @@
+"""Packaged notebook entry resources."""

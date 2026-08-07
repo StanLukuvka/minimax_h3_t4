@@ -11,11 +11,12 @@ authors = [
 ]
 readme = "README.md"
 license = "GPL-3.0-or-later"
-license-files = ["LICENSE", "NOTICE.md"]
+license-files = ["LICENSE", "NOTICE.md", "licenses/Apache-2.0.txt"]
 requires-python = ">=3.10"
 classifiers = []
 dependencies = [
     "ray>=2.48.0",
+    "safetensors>=0.4.0",
     "xfuser>=0.4.4",
     "yunchang>=0.6.4",
 ]
@@ -32,11 +33,6 @@ dev = [
     "ruff",  # linting
 ]
 
-[project.urls]
-Repository = "https://github.com/StanLukuvka/minimax_h3_t4"
-BugTracker = "https://github.com/StanLukuvka/minimax_h3_t4/issues"
-Documentation = "https://github.com/StanLukuvka/minimax_h3_t4/wiki"
-
 
 [tool.comfy]
 PublisherId = "StanLukuvka"
@@ -48,7 +44,7 @@ Repository = "https://github.com/StanLukuvka/minimax_h3_t4"
 includes = []
 
 [tool.setuptools.package-data]
-"*" = ["*.*"]
+"minimax_h3_t4" = ["workflows/*.json", "notebooks/*.py"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

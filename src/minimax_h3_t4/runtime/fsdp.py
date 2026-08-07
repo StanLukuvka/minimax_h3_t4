@@ -1,3 +1,8 @@
+"""Direct TensorWise INT8-to-FSDP shard mapping.
+
+Apache-2.0 donor provenance is recorded in NOTICE.md.
+"""
+
 from __future__ import annotations
 
 import json

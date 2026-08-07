@@ -41,16 +41,19 @@ Clone the repository into ComfyUI's `custom_nodes` directory and install its Pyt
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/StanLukuvka/minimax_h3_t4.git
+git clone <published-repository-url> minimax_h3_t4
 cd minimax_h3_t4
 python -m pip install -e .
 ```
+
+The repository has not been published yet; substitute its immutable release URL after publication.
 
 Restart ComfyUI after installation.
 
 Runtime dependencies declared by the extension are limited to:
 
 - `ray>=2.48.0`
+- `safetensors>=0.4.0`
 - `xfuser>=0.4.4`
 - `yunchang>=0.6.4`
 
@@ -76,7 +79,7 @@ This dependency ordering ensures that the large conditioning model and condition
 - `workflows/minimax_h3_t4_spectrum.json` — native Spectrum path with the conservative defaults below.
 - `notebooks/kaggle_install.py` — checks for exactly two T4 GPUs, installs pinned ComfyUI/runtime dependencies, links attached model datasets, installs both workflows, and starts ComfyUI.
 
-The Kaggle entry defaults to the proven ComfyUI commit. Before publishing a reproducible notebook, set `H3_T4_EXTENSION_REF` to a full release commit rather than `main`.
+The Kaggle entry defaults to the proven ComfyUI commit. It intentionally refuses mutable or missing extension coordinates: set `H3_T4_EXTENSION_REPO_URL` to the published repository and `H3_T4_EXTENSION_REF` to a full release commit.
 
 Kaggle does not expose notebook ports directly. Setting `H3_T4_ENABLE_CLOUDFLARE=1` enables the script's checksum-pinned Cloudflare quick tunnel, but that URL is unauthenticated and should be treated as temporary public access. The tunnel is disabled by default.
 

@@ -1,3 +1,8 @@
+"""MiniMax-H3 Ulysses forward implementation.
+
+Apache-2.0 donor provenance is recorded in NOTICE.md.
+"""
+
 import torch
 
 import comfy

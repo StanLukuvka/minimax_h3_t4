@@ -1,4 +1,7 @@
-"""MiniMax-H3-only Ulysses patch injection."""
+"""MiniMax-H3-only Ulysses patch injection.
+
+Apache-2.0 donor provenance is recorded in NOTICE.md.
+"""
 
 from __future__ import annotations
 

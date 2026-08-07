@@ -1,5 +1,7 @@
+include __init__.py
 include LICENSE
 include NOTICE.md
+include licenses/Apache-2.0.txt
 include README.md
 include SCAFFOLD.md
 

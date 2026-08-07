@@ -37,6 +37,7 @@ venv/
 build/
 develop-eggs/
 dist/
+_ray_runtime_env/
 downloads/
 eggs/
 .eggs/

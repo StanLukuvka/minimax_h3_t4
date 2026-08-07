@@ -38,6 +38,19 @@ def test_kaggle_installer_requires_exactly_two_t4s(monkeypatch) -> None:
         module.require_two_t4s()
 
 
+def test_kaggle_installer_requires_immutable_extension_commit() -> None:
+    module = load_script()
+    with pytest.raises(ValueError, match="full 40-character commit"):
+        module.require_full_commit("main", variable="H3_T4_EXTENSION_REF")
+    module.require_full_commit("a" * 40, variable="H3_T4_EXTENSION_REF")
+
+
+def test_kaggle_runtime_dependencies_are_exactly_pinned() -> None:
+    module = load_script()
+    assert "ray==2.56.1" in module.PINNED_RUNTIME
+    assert all(">=" not in dependency and "<=" not in dependency for dependency in module.PINNED_RUNTIME)
+
+
 def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) -> None:
     module = load_script()
     payload = b"pinned cloudflared test binary"
@@ -52,6 +65,11 @@ def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) ->
 
     assert module.ensure_cloudflared() == target
     assert target.read_bytes() == payload
+
+
+def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
+    packaged = SCRIPT.parents[1] / "src" / "minimax_h3_t4" / "notebooks" / "kaggle_install.py"
+    assert packaged.read_bytes() == SCRIPT.read_bytes()
 
 
 def test_kaggle_installer_has_no_donor_plugin_installation() -> None:
