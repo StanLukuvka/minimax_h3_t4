@@ -126,5 +126,12 @@ class H3T4SamplerAdvanced:
     @staticmethod
     def _validate_av_latent(latent: Any) -> None:
         samples = latent.get("samples") if isinstance(latent, dict) else None
-        if not isinstance(samples, (list, tuple)) or len(samples) != 2:
-            raise RuntimeError("MiniMax-H3 worker must preserve samples as [video, audio]")
+        unbind = getattr(samples, "unbind", None)
+        if getattr(samples, "is_nested", False) and callable(unbind):
+            parts = unbind()
+        elif isinstance(samples, (list, tuple)):
+            parts = samples
+        else:
+            raise RuntimeError("MiniMax-H3 worker must return a ComfyUI AV latent")
+        if len(tuple(parts)) != 2:
+            raise RuntimeError("MiniMax-H3 worker must preserve video and audio latent parts")

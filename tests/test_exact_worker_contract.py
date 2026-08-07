@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.minimax_h3_t4.runtime.checkpoint import require_int8_state_dict
-from src.minimax_h3_t4.runtime.worker import validate_worker_config
+from src.minimax_h3_t4.runtime.worker import H3T4Worker, validate_worker_config, zero_noise_like
 
 
 ROOT = Path(__file__).parents[1]
@@ -59,6 +59,60 @@ def test_checkpoint_accepts_only_comfykitchen_tensorwise_int8() -> None:
 
     with pytest.raises(ValueError, match="INT8-only"):
         require_int8_state_dict({"block.weight": object()})
+
+
+def test_zero_noise_preserves_comfy_nested_av_container() -> None:
+    class Nested:
+        is_nested = True
+
+        def __init__(self, tensors):
+            self.tensors = list(tensors)
+
+        def unbind(self):
+            return self.tensors
+
+    class FakeTorch:
+        @staticmethod
+        def zeros_like(value):
+            return f"zero:{value}"
+
+    result = zero_noise_like(Nested(("video", "audio")), FakeTorch)
+
+    assert isinstance(result, Nested)
+    assert result.unbind() == ["zero:video", "zero:audio"]
+
+
+def test_worker_attaches_native_spectrum_to_owned_h3_model() -> None:
+    class Diffusion:
+        pass
+
+    class Base:
+        diffusion_model = Diffusion()
+
+    class Patcher:
+        model = Base()
+
+    worker = object.__new__(H3T4Worker)
+    worker.model = Patcher()
+    worker.spectrum_controller = None
+    configured = worker.configure_spectrum(
+        {
+            "enabled": True,
+            "blend_weight": 0.5,
+            "degree": 2,
+            "ridge_lambda": 0.1,
+            "window_size": 2.0,
+            "flex_window": 0.0,
+            "warmup_steps": 2,
+            "tail_actual_steps": 1,
+            "max_history": 4,
+            "history_storage": "system_ram",
+            "debug": False,
+        }
+    )
+
+    assert configured is True
+    assert worker.spectrum_controller is getattr(Base.diffusion_model, "_h3_t4_spectrum_controller")
 
 
 def test_runtime_closure_has_no_donor_or_excluded_model_imports() -> None:

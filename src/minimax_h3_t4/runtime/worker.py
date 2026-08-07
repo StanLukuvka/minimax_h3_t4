@@ -15,6 +15,13 @@ def validate_worker_config(config: dict[str, object]) -> None:
         raise ValueError(f"MiniMax-H3 worker requires the exact two-T4 topology: {expected!r}")
 
 
+def zero_noise_like(samples: Any, torch_module: Any) -> Any:
+    """Create zero noise while preserving ComfyUI's NestedTensor AV container."""
+    if getattr(samples, "is_nested", False):
+        return type(samples)(tuple(torch_module.zeros_like(tensor) for tensor in samples.unbind()))
+    return torch_module.zeros_like(samples)
+
+
 class H3T4Worker:
     """One rank of the fixed two-T4 FSDP + Ulysses MiniMax-H3 runtime."""
 
@@ -24,6 +31,7 @@ class H3T4Worker:
         self.config = dict(config)
         self.model = None
         self.device_mesh = None
+        self.spectrum_controller = None
         self._initialize_distributed()
 
     def _initialize_distributed(self) -> None:
@@ -115,6 +123,21 @@ class H3T4Worker:
         self.model = patcher
         return True
 
+    def configure_spectrum(self, config: dict[str, Any]) -> bool:
+        if self.model is None:
+            raise RuntimeError("load the MiniMax-H3 model before configuring Spectrum")
+        from ..spectrum.config import SpectrumConfig
+        from ..spectrum.controller import SpectrumController
+
+        controller = SpectrumController(SpectrumConfig(**config))
+        base_model = getattr(self.model, "model", self.model)
+        diffusion_model = getattr(base_model, "diffusion_model", None)
+        if diffusion_model is None:
+            raise RuntimeError("loaded model has no MiniMax-H3 diffusion model")
+        diffusion_model._h3_t4_spectrum_controller = controller
+        self.spectrum_controller = controller
+        return True
+
     def get_sigmas(self, scheduler: str, steps: int, denoise: float):
         import comfy.samplers
         import torch
@@ -156,21 +179,31 @@ class H3T4Worker:
             generated_noise = noise_source.generate_noise(input_latent)
             seed = getattr(noise_source, "seed", None)
         else:
-            generated_noise = torch.zeros_like(latent_samples)
+            generated_noise = zero_noise_like(latent_samples, torch)
             seed = None
         guider = BasicGuider(self.model)
         guider.set_conds(guider_spec["positive"])
         x0_output: dict[str, Any] = {}
-        samples = guider.sample(
-            generated_noise,
-            latent_samples,
-            sampler,
-            sigmas,
-            denoise_mask=input_latent.get("noise_mask"),
-            callback=lambda _step, x0, _x, _total: x0_output.update(x0=x0),
-            disable_pbar=self.rank != 0 or not comfy.utils.PROGRESS_BAR_ENABLED,
-            seed=seed,
-        )
+        if self.spectrum_controller is not None:
+            self.spectrum_controller.start_run(sigmas)
+        try:
+            samples = guider.sample(
+                generated_noise,
+                latent_samples,
+                sampler,
+                sigmas,
+                denoise_mask=input_latent.get("noise_mask"),
+                callback=lambda _step, x0, _x, _total: x0_output.update(x0=x0),
+                disable_pbar=self.rank != 0 or not comfy.utils.PROGRESS_BAR_ENABLED,
+                seed=seed,
+            )
+        except Exception as exc:
+            if self.spectrum_controller is not None:
+                self.spectrum_controller.abort_run(f"sampling failed: {type(exc).__name__}: {exc}")
+            raise
+        else:
+            if self.spectrum_controller is not None:
+                self.spectrum_controller.end_run()
         # Both ranks execute collectives; only rank zero sends AV latents back.
         if self.rank != 0:
             return None
@@ -189,6 +222,7 @@ class H3T4Worker:
         import torch.distributed as dist
 
         self.model = None
+        self.spectrum_controller = None
         gc.collect()
         torch.cuda.empty_cache()
         if dist.is_initialized():

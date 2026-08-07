@@ -286,48 +286,67 @@ def h3_ulysses_forward(self, x, timestep, context, transformer_options={}, minim
     if trace_this_forward:
         h3_memory_snapshot("h3_after_split_release", local_rows=h.shape[0])
 
-    # blocks
+    # One owner chooses exact block execution or a synchronized Spectrum forecast.
     patches_replace = transformer_options.get("patches_replace", {})
     blocks_replace = patches_replace.get("dit", {})
-    prefetch_queue = comfy.model_prefetch.make_prefetch_queue(list(self.blocks), device, transformer_options)
-    for i, block in enumerate(self.blocks):
-        if trace_this_forward:
-            torch.cuda.reset_peak_memory_stats()
-            h3_memory_snapshot("h3_block_start", block=i, local_rows=h.shape[0])
-        comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, block)
-        if profile_this_forward and i == 0:
-            set_h3_phase_profile_active(True)
-        if ("double_block", i) in blocks_replace:
 
-            def block_wrap(args):
-                return {
-                    "img": block(
-                        args["img"],
-                        args["t_emb"],
-                        args["mod_segments"],
-                        args["rope_freqs"],
-                        transformer_options=args["transformer_options"],
-                    )
-                }
+    def run_exact_blocks(hidden):
+        prefetch_queue = comfy.model_prefetch.make_prefetch_queue(list(self.blocks), device, transformer_options)
+        for i, block in enumerate(self.blocks):
+            if trace_this_forward:
+                torch.cuda.reset_peak_memory_stats()
+                h3_memory_snapshot("h3_block_start", block=i, local_rows=hidden.shape[0])
+            comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, block)
+            if profile_this_forward and i == 0:
+                set_h3_phase_profile_active(True)
+            if ("double_block", i) in blocks_replace:
 
-            h = blocks_replace[("double_block", i)](
-                {
-                    "img": h,
-                    "t_emb": t_emb,
-                    "mod_segments": mod_segments,
-                    "rope_freqs": rope_freqs,
-                    "transformer_options": transformer_options,
-                },
-                {"original_block": block_wrap},
-            )["img"]
-        else:
-            h = block(h, t_emb, mod_segments, rope_freqs, transformer_options=transformer_options)
-        if profile_this_forward and i == 0:
-            set_h3_phase_profile_active(False)
-        if trace_this_forward:
-            h3_memory_snapshot("h3_block_end", block=i, local_rows=h.shape[0])
-    if prefetch_queue is not None:
-        comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, None)
+                def block_wrap(args):
+                    return {
+                        "img": block(
+                            args["img"],
+                            args["t_emb"],
+                            args["mod_segments"],
+                            args["rope_freqs"],
+                            transformer_options=args["transformer_options"],
+                        )
+                    }
+
+                hidden = blocks_replace[("double_block", i)](
+                    {
+                        "img": hidden,
+                        "t_emb": t_emb,
+                        "mod_segments": mod_segments,
+                        "rope_freqs": rope_freqs,
+                        "transformer_options": transformer_options,
+                    },
+                    {"original_block": block_wrap},
+                )["img"]
+            else:
+                hidden = block(hidden, t_emb, mod_segments, rope_freqs, transformer_options=transformer_options)
+            if profile_this_forward and i == 0:
+                set_h3_phase_profile_active(False)
+            if trace_this_forward:
+                h3_memory_snapshot("h3_block_end", block=i, local_rows=hidden.shape[0])
+        if prefetch_queue is not None:
+            comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, None)
+        return hidden
+
+    spectrum = getattr(self, "_h3_t4_spectrum_controller", None)
+    if spectrum is None:
+        h = run_exact_blocks(h)
+    else:
+        topology = (
+            tuple(h.shape),
+            int(h_orig_size),
+            tuple(tuple(segment) for segment in mod_segments),
+        )
+        h = spectrum.execute_h3_stack(
+            timestep=sigma_v,
+            hidden=h,
+            topology=topology,
+            exact=lambda: run_exact_blocks(h),
+        )
 
     # ===================== SP GATHER ===================== #
     if trace_this_forward:

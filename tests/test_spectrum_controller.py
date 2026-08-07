@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -63,3 +65,12 @@ def test_controller_aborts_and_clears_history_when_exact_h3_fails() -> None:
 
     assert controller.runtime.stats.disabled
     assert controller.runtime.forecaster.history_length == 0
+
+
+def test_h3_forward_wraps_only_the_worker_local_block_stack() -> None:
+    source = (Path(__file__).parents[1] / "src" / "minimax_h3_t4" / "runtime" / "h3_forward.py").read_text()
+
+    decision = source.index("spectrum.execute_h3_stack")
+    gather = source.index("get_sp_group().all_gather", decision)
+    final_layer = source.index("self.final_layer", gather)
+    assert decision < gather < final_layer
