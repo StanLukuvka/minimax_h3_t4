@@ -52,6 +52,7 @@ Runtime dependencies declared by the extension are limited to:
 
 - `ray>=2.48.0`
 - `xfuser>=0.4.4`
+- `yunchang>=0.6.4`
 
 PyTorch, ComfyKitchen, and the MiniMax H3 model implementation are supplied by the host ComfyUI installation.
 
