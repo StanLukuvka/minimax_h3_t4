@@ -119,16 +119,18 @@ def test_runtime_closure_has_no_donor_or_excluded_model_imports() -> None:
     forbidden = (
         "raylight",
         "comfyui_spectrum_h3",
-        "ControlNet",
-        "PipeFusion",
-        "GGUF",
-        "NVFP4",
-        "EasyCache",
-        "LoRA",
+        "controlnet",
+        "pipefusion",
+        "gguf",
+        "nvfp4",
+        "fp8",
+        "easycache",
+        "bob_triton",
+        "lora",
     )
     violations = []
     for path in sorted((ROOT / "src" / "minimax_h3_t4" / "runtime").rglob("*.py")):
-        source = path.read_text()
+        source = path.read_text().lower()
         for marker in forbidden:
             if marker in source:
                 violations.append((path.name, marker))

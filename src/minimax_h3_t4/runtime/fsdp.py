@@ -357,58 +357,17 @@ def _decode_comfy_quant(conf: Any) -> dict[str, Any] | None:
     raise TypeError(f"Unsupported comfy_quant type: {type(conf)}")
 
 
-def _find_scaled_fp8_key(full_sd: dict[str, Any]) -> str | None:
-    if "scaled_fp8" in full_sd:
-        return "scaled_fp8"
-
-    for key in full_sd.keys():
-        if key.endswith(".scaled_fp8"):
-            return key
-
-    return None
-
-
-def _legacy_scaled_fp8_conf(prefix: str, full_sd: dict[str, Any]) -> dict[str, Any] | None:
-    has_legacy_scale = f"{prefix}scale_weight" in full_sd
-    has_converted_scale = f"{prefix}weight_scale" in full_sd
-    if not has_legacy_scale and not has_converted_scale:
-        return None
-
-    conf: dict[str, Any] = {"format": "float8_e4m3fn"}
-    scaled_fp8_key = _find_scaled_fp8_key(full_sd)
-    if scaled_fp8_key is not None:
-        scaled_fp8_weight = full_sd.get(scaled_fp8_key)
-        if isinstance(scaled_fp8_weight, torch.Tensor) and scaled_fp8_weight.nelement() == 2:
-            conf["full_precision_matrix_mult"] = True
-
-    return conf
-
-
 def _quant_payload_debug_info(param_name: str, full_sd: dict[str, Any]) -> str:
     prefix = param_name[: -len("weight")] if param_name.endswith("weight") else param_name
     debug_bits = {
         "weight": param_name in full_sd,
         "comfy_quant": f"{prefix}comfy_quant" in full_sd,
         "weight_scale": f"{prefix}weight_scale" in full_sd,
-        "weight_scale_2": f"{prefix}weight_scale_2" in full_sd,
-        "input_scale": f"{prefix}input_scale" in full_sd,
-        "legacy_scale_weight": f"{prefix}scale_weight" in full_sd,
-        "legacy_scale_input": f"{prefix}scale_input" in full_sd,
-        "scaled_fp8": _find_scaled_fp8_key(full_sd) is not None,
     }
     prefix_keys = sorted(
         key
         for key in full_sd.keys()
-        if key.startswith(prefix)
-        and (
-            key == param_name
-            or key.endswith("comfy_quant")
-            or key.endswith("weight_scale")
-            or key.endswith("weight_scale_2")
-            or key.endswith("input_scale")
-            or key.endswith("scale_weight")
-            or key.endswith("scale_input")
-        )
+        if key.startswith(prefix) and (key == param_name or key.endswith("comfy_quant") or key.endswith("weight_scale"))
     )
     return f"payload={debug_bits}, prefix_keys={prefix_keys}"
 
@@ -456,9 +415,7 @@ def _is_quant_param(param_name: str, full_sd: dict[str, Any], sharded_meta_param
         return True
 
     prefix = param_name[: -len("weight")] if param_name.endswith("weight") else None
-    if prefix is not None and (
-        f"{prefix}comfy_quant" in full_sd or f"{prefix}weight_scale" in full_sd or f"{prefix}scale_weight" in full_sd
-    ):
+    if prefix is not None and f"{prefix}comfy_quant" in full_sd:
         return True
 
     if isinstance(sharded_meta_param, QuantizedTensor):
@@ -475,11 +432,9 @@ def _build_quantized_tensor(
     sharded_meta_param: Any,
     device: torch.device,
 ):
-    def _local_orig_shape(layout_name: str, local_qdata: torch.Tensor, logical_orig_shape: tuple[int, ...] | None) -> tuple[int, ...]:
+    def _local_orig_shape(local_qdata: torch.Tensor, logical_orig_shape: tuple[int, ...] | None) -> tuple[int, ...]:
         if logical_orig_shape is None:
             return tuple(local_qdata.shape)
-        if layout_name == "UnsupportedFourBitLayout" and len(logical_orig_shape) == 2 and local_qdata.dim() == 2:
-            return (int(local_qdata.shape[0]), int(logical_orig_shape[1]))
         return tuple(local_qdata.shape)
 
     if not param_name.endswith("weight"):
@@ -493,14 +448,12 @@ def _build_quantized_tensor(
         local_qdata = _shard_tensor(qt._qdata, sharded_meta_param, device, pad_to_local_meta=False)
         local_params = replace(
             qt._params,
-            orig_shape=_local_orig_shape(qt._layout_cls, local_qdata, getattr(qt._params, "orig_shape", None)),
+            orig_shape=_local_orig_shape(local_qdata, getattr(qt._params, "orig_shape", None)),
         )
         return QuantizedTensor(local_qdata, qt._layout_cls, local_params)
 
     prefix = param_name[: -len("weight")]
     conf = _decode_comfy_quant(full_sd.get(f"{prefix}comfy_quant"))
-    if conf is None:
-        conf = _legacy_scaled_fp8_conf(prefix, full_sd)
     if conf is None:
         return None
 
@@ -538,69 +491,22 @@ def _build_quantized_tensor(
         params_kwargs["orig_dtype"] = orig_dtype
 
     logical_orig_shape = getattr(getattr(local_meta, "_params", None), "orig_shape", None)
-    if logical_orig_shape is None and quant_format == "nvfp4" and full_qdata.dim() == 2:
-        logical_orig_shape = (int(full_qdata.shape[0]), int(full_qdata.shape[1] * 2))
-    params_kwargs["orig_shape"] = _local_orig_shape(layout_name, qdata, logical_orig_shape)
+    params_kwargs["orig_shape"] = _local_orig_shape(qdata, logical_orig_shape)
 
-    if quant_format in ("float8_e4m3fn", "float8_e5m2"):
-        scale = full_sd.get(f"{prefix}weight_scale")
-        if scale is None:
-            scale = full_sd.get(f"{prefix}scale_weight")
-        if scale is not None:
-            scale = scale.to(device=device)
-        params_kwargs["scale"] = scale
-    elif quant_format == "nvfp4":
-        tensor_scale = full_sd.get(f"{prefix}weight_scale_2")
-        block_scale = full_sd.get(f"{prefix}weight_scale")
-        if tensor_scale is None or block_scale is None:
-            raise ValueError(f"Missing unsupported four-bit scales for {param_name}")
-        tensor_scale = tensor_scale.to(device=device)
-        block_scale = block_scale.view(dtype=torch.float8_e4m3fn)
-        block_scale = _shard_tensor(block_scale, sharded_meta_param, device, pad_to_local_meta=False)
-        params_kwargs["scale"] = tensor_scale
-        params_kwargs["block_scale"] = block_scale
-    elif quant_format == "int8_tensorwise":
-        scale = full_sd.get(f"{prefix}weight_scale")
-        if scale is None:
-            raise ValueError(f"Missing INT8 weight scale for {param_name}")
-        if isinstance(scale, torch.Tensor) and scale.dim() > 0 and scale.numel() > 1:
-            scale = _shard_tensor(scale, sharded_meta_param, device, pad_to_local_meta=False)
-        elif isinstance(scale, torch.Tensor):
-            scale = scale.to(device=device)
-        params_kwargs["scale"] = scale
-        params_conf = conf.get("params", {})
-        if not isinstance(params_conf, dict):
-            params_conf = {}
-        if conf.get("convrot", params_conf.get("convrot", False)):
-            params_kwargs["convrot"] = True
-            params_kwargs["convrot_groupsize"] = int(conf.get("convrot_groupsize", params_conf.get("convrot_groupsize", 256)))
-    elif quant_format == "gguf":
-        n_blocks_per_superblock = conf.get("n_blocks_per_superblock", 8)
-        super_block_scale_scale = full_sd.get(f"{prefix}super_block_scale_scale")
-        super_block_min_scale = full_sd.get(f"{prefix}super_block_min_scale")
-        quantized_block_scale = full_sd.get(f"{prefix}quantized_block_scale")
-        quantized_block_min = full_sd.get(f"{prefix}quantized_block_min")
-        if super_block_scale_scale is None or super_block_min_scale is None or quantized_block_scale is None or quantized_block_min is None:
-            raise ValueError(f"Missing unsupported quantization scales for {param_name}")
-        super_block_scale_scale = super_block_scale_scale.to(device=device)
-        super_block_min_scale = super_block_min_scale.to(device=device)
-        quantized_block_scale = quantized_block_scale.to(device=device)
-        quantized_block_min = quantized_block_min.to(device=device)
-        super_block_scale_scale = _shard_tensor(super_block_scale_scale, sharded_meta_param, device, pad_to_local_meta=False)
-        super_block_min_scale = _shard_tensor(super_block_min_scale, sharded_meta_param, device, pad_to_local_meta=False)
-        quantized_block_scale = _shard_tensor(quantized_block_scale, sharded_meta_param, device, pad_to_local_meta=False)
-        quantized_block_min = _shard_tensor(quantized_block_min, sharded_meta_param, device, pad_to_local_meta=False)
-        params_kwargs["n_blocks_per_superblock"] = n_blocks_per_superblock
-        params_kwargs["super_block_scale_scale"] = super_block_scale_scale
-        params_kwargs["super_block_min_scale"] = super_block_min_scale
-        params_kwargs["quantized_block_scale"] = quantized_block_scale
-        params_kwargs["quantized_block_min"] = quantized_block_min
-        if f"{prefix}scale" in full_sd:
-            scale = full_sd.get(f"{prefix}scale")
-            if scale is not None:
-                params_kwargs["scale"] = scale.to(device=device)
-    else:
-        raise ValueError(f"Unsupported quantization format: {quant_format}")
+    scale = full_sd.get(f"{prefix}weight_scale")
+    if scale is None:
+        raise ValueError(f"Missing INT8 weight scale for {param_name}")
+    if isinstance(scale, torch.Tensor) and scale.dim() > 0 and scale.numel() > 1:
+        scale = _shard_tensor(scale, sharded_meta_param, device, pad_to_local_meta=False)
+    elif isinstance(scale, torch.Tensor):
+        scale = scale.to(device=device)
+    params_kwargs["scale"] = scale
+    params_conf = conf.get("params", {})
+    if not isinstance(params_conf, dict):
+        params_conf = {}
+    if conf.get("convrot", params_conf.get("convrot", False)):
+        params_kwargs["convrot"] = True
+        params_kwargs["convrot_groupsize"] = int(conf.get("convrot_groupsize", params_conf.get("convrot_groupsize", 256)))
 
     params = layout_cls.Params(**params_kwargs)
     return QuantizedTensor(qdata, layout_name, params)
@@ -611,13 +517,7 @@ def _release_quant_keys(full_sd: dict[str, Any], param_name: str) -> None:
     for key in (
         param_name,
         f"{prefix}weight_scale",
-        f"{prefix}weight_scale_2",
-        f"{prefix}scale_weight",
         f"{prefix}comfy_quant",
-        f"{prefix}super_block_scale_scale",
-        f"{prefix}super_block_min_scale",
-        f"{prefix}quantized_block_scale",
-        f"{prefix}quantized_block_min",
     ):
         if key in full_sd:
             full_sd[key] = None
