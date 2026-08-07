@@ -6,6 +6,7 @@ from src.minimax_h3_t4.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPI
 EXPECTED_NODES = {
     "H3T4Initializer",
     "H3T4UNETLoader",
+    "H3T4Spectrum",
     "H3T4BasicScheduler",
     "H3T4BasicGuider",
     "H3T4SamplerAdvanced",
