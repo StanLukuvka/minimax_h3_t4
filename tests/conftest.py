@@ -1,6 +1,8 @@
-import os
+from pathlib import Path
 import sys
 
-# Add the project root directory to Python path
-# This allows the tests to import the project
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Exercise the installed package layout without requiring an editable install.
+PROJECT_ROOT = Path(__file__).parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT))
