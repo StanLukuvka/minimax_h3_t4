@@ -96,6 +96,7 @@ class H3T4SamplerAdvanced:
         group.require_alive()
         refs: list[Any] = []
         worker_guider = {"type": "basic", "positive": guider["positive"]}
+        primary_error: BaseException | None = None
         try:
             for worker in group.workers:
                 refs.append(
@@ -120,8 +121,18 @@ class H3T4SamplerAdvanced:
             self._validate_av_latent(output)
             self._validate_av_latent(denoised)
             return output, denoised
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            group.close(timeout_seconds=30.0)
+            try:
+                group.close(timeout_seconds=30.0)
+            except BaseException as close_exc:
+                if primary_error is None:
+                    raise
+                add_note = getattr(primary_error, "add_note", None)
+                if callable(add_note):
+                    add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
 
     @staticmethod
     def _validate_av_latent(latent: Any) -> None:

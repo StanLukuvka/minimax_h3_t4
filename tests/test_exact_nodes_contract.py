@@ -19,6 +19,10 @@ class RemoteMethod:
 
 
 class FakeRay:
+    class exceptions:
+        class RayActorError(RuntimeError):
+            pass
+
     def __init__(self) -> None:
         self.init_kwargs = None
         self.shutdown_calls = 0
@@ -28,6 +32,8 @@ class FakeRay:
 
     @staticmethod
     def get(value):
+        if isinstance(value, str) and value.startswith("actor-exited:"):
+            raise FakeRay.exceptions.RayActorError(value)
         return value
 
     @staticmethod
@@ -49,7 +55,8 @@ class FakeWorker:
         self.load_unet = RemoteMethod(self._load_unet)
         self.get_sigmas = RemoteMethod(lambda scheduler, steps, denoise: [scheduler, steps, denoise])
         self.sample_advanced = RemoteMethod(self._sample)
-        self.shutdown = RemoteMethod(lambda: self.events.append(("shutdown", self.rank)))
+        self.shutdown = RemoteMethod(lambda: (events.append(("shutdown", rank)), f"actor-exited:{rank}")[1])
+        self.__ray_ready__ = RemoteMethod(lambda: f"actor-exited:{rank}")
 
     def _load_unet(self, path, weight_dtype):
         self.events.append(("load", self.rank, path, weight_dtype))
@@ -83,6 +90,20 @@ def test_initializer_contract_is_fixed_and_object_store_is_bounded() -> None:
     assert H3T4Initializer.RETURN_TYPES == ("H3T4_ACTOR_GROUP",)
 
 
+def test_initializer_requires_conditioning_before_ray_start() -> None:
+    fake_ray = FakeRay()
+    initializer = H3T4Initializer(
+        ray_module=fake_ray,
+        model_management=types.SimpleNamespace(unload_all_models=lambda: None, soft_empty_cache=lambda: None),
+        worker_factory=lambda rank, _config: FakeWorker(rank, []),
+        runtime_env_builder=lambda: {},
+    )
+
+    with pytest.raises(ValueError, match="requires conditioning"):
+        initializer.initialize("minimax-h3-t4", "0,1", 0.5, None)
+    assert fake_ray.init_kwargs is None
+
+
 def test_initializer_releases_conditioning_before_ray_init(monkeypatch) -> None:
     events: list[object] = []
     fake_ray = FakeRay()
@@ -91,10 +112,20 @@ def test_initializer_releases_conditioning_before_ray_init(monkeypatch) -> None:
         soft_empty_cache=lambda: events.append("empty"),
     )
 
+    runtime_env = {
+        "py_modules": ["/extension/src/minimax_h3_t4"],
+        "working_dir": "/extension/_ray_runtime_env",
+        "env_vars": {
+            "CUDA_VISIBLE_DEVICES": "0,1",
+            "PYTHONPATH": "/comfy",
+            "COMFYUI_BASE_DIRECTORY": "/comfy",
+        },
+    }
     initializer = H3T4Initializer(
         ray_module=fake_ray,
         model_management=fake_comfy,
         worker_factory=lambda rank, _config: FakeWorker(rank, events),
+        runtime_env_builder=lambda: runtime_env,
     )
     monkeypatch.setattr(fake_ray, "init", lambda **kwargs: (events.append("ray.init"), setattr(fake_ray, "init_kwargs", kwargs)))
 
@@ -103,6 +134,7 @@ def test_initializer_releases_conditioning_before_ray_init(monkeypatch) -> None:
     assert events[:3] == ["unload", "empty", "ray.init"]
     assert len(group.workers) == 2
     assert fake_ray.init_kwargs["object_store_memory"] == 512 * 1024**2
+    assert fake_ray.init_kwargs["runtime_env"] is runtime_env
 
 
 def test_int8_unet_load_is_strictly_sequential_after_conditioning_release() -> None:

@@ -88,6 +88,40 @@ class SpectrumRuntime:
         self.forecaster.reset()
         self._topology = None
 
+    def disable_for_run(self, reason: str) -> None:
+        self.stats.disabled = True
+        self.stats.disable_reason = str(reason)
+        self.forecaster.reset()
+        self._topology = None
+
+    def check_topology(self, topology: tuple[Any, ...]) -> bool:
+        normalized = tuple(topology)
+        if self._topology is None:
+            self._topology = normalized
+            return True
+        if normalized == self._topology:
+            return True
+        self.disable_for_run("packed H3 topology changed")
+        self._topology = normalized
+        return False
+
+    def fail_closed_step(self, timestep: torch.Tensor | float, reason: str) -> StepDecision:
+        if not self._active:
+            raise RuntimeError("Spectrum runtime is outside a sampling run")
+        if self._step is not None:
+            self.force_actual(reason)
+            return self._step
+        if self._next_step >= self.stats.total_steps:
+            raise RuntimeError("H3 call count exceeded the supplied sigma schedule")
+        try:
+            coordinate = self._coordinate(timestep)
+        except (RuntimeError, ValueError, TypeError):
+            coordinate = 0.0
+        self.disable_for_run(reason)
+        self._step = StepDecision(self._next_step, coordinate, True, str(reason))
+        self._next_step += 1
+        return self._step
+
     def _coordinate(self, timestep: torch.Tensor | float) -> float:
         value = torch.as_tensor(timestep, device="cpu", dtype=torch.float64).reshape(-1)
         if value.numel() == 0 or not bool(torch.isfinite(value).all().item()):

@@ -1,4 +1,5 @@
 # INT8 tensorwise patches for standalone MiniMax-H3 FSDP operations.
+# Apache-2.0 donor provenance is recorded in NOTICE.md.
 from __future__ import annotations
 
 import os
@@ -56,15 +57,21 @@ def call_cuda_int8_with_oom_retry(operation, *, torch_module=torch, **kwargs):
         return operation(**kwargs)
 
 
-def _int8_accumulator_mib() -> int:
-    raw = os.environ.get("H3_T4_INT8_ACCUMULATOR_MIB", "128")
-    try:
-        accumulator_mib = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"H3_T4_INT8_ACCUMULATOR_MIB must be an integer, got {raw!r}") from exc
-    if not 16 <= accumulator_mib <= 256:
-        raise ValueError(f"H3_T4_INT8_ACCUMULATOR_MIB must be between 16 and 256, got {accumulator_mib}")
-    return accumulator_mib
+def require_tesla_t4(torch_module: Any, device: Any) -> None:
+    properties = torch_module.cuda.get_device_properties(device)
+    if (properties.major, properties.minor) != (7, 5) or "T4" not in properties.name.upper():
+        raise RuntimeError(
+            "The exact MiniMax-H3 runtime requires an NVIDIA Tesla T4 (CUDA capability 7.5); "
+            f"detected {properties.name} ({properties.major}.{properties.minor})"
+        )
+
+
+def run_with_cuda_int8_backend(operation: Any, *, kitchen_module: Any | None = None) -> Any:
+    if kitchen_module is None:
+        import comfy_kitchen as kitchen_module
+
+    with kitchen_module.use_backend("eager"):
+        return operation()
 
 
 def _bounded_eager_int8_linear(
@@ -77,120 +84,20 @@ def _bounded_eager_int8_linear(
     convrot_groupsize: int = 256,
     input_act: str | None = None,
 ) -> torch.Tensor:
-    """Run eager INT8 linear without a full int32 accumulator plus BF16 part list.
-
-    Comfy Kitchen's generic eager fallback computes the complete int32 GEMM, builds
-    every scaled BF16 chunk, then concatenates those chunks.  H3 on a 15 GiB T4
-    reaches 13.22 GiB before that final 629 MiB concatenation.  Compute GEMM rows
-    in bounded pieces directly into one output allocation instead.
-    """
-    global _INT8_PHASE_CALLS, _INT8_TRACE_CALLS
-
+    """Eager dispatch gateway that permits only the CUDA INT8 kernel."""
     backend = os.environ.get("H3_T4_INT8_BACKEND", "cuda").strip().lower()
-    if backend == "cuda":
-        return _profiled_cuda_int8_linear(
-            x=x,
-            weight=weight,
-            weight_scale=weight_scale,
-            bias=bias,
-            out_dtype=out_dtype,
-            convrot=convrot,
-            convrot_groupsize=convrot_groupsize,
-            input_act=input_act,
-        )
-    if backend != "eager":
-        raise ValueError(f"Unsupported H3 INT8 backend: {backend!r}")
-
-    from comfy_kitchen.backends.eager import quantization as eager_quantization
-    from comfy_kitchen.tensor.int8_utils import _build_hadamard, _rotate_activation
-
-    trace_call = _INT8_TRACE_CALLS
-    phase_call = _INT8_PHASE_CALLS
-    profile_this_linear = h3_phase_profile_active() and phase_call < 4
-    if h3_phase_profile_active():
-        _INT8_PHASE_CALLS += 1
-    phase_start = None
-    if profile_this_linear:
-        phase_start = torch.cuda.Event(enable_timing=True)
-        phase_start.record()
-    x = eager_quantization._apply_input_act(x, input_act)
-    if x.shape[-1] != weight.shape[-1]:
-        raise ValueError(f"Input and weight inner dimensions must match, got {x.shape[-1]} and {weight.shape[-1]}")
-
-    weight = weight.to(device=x.device).contiguous()
-    weight_scale = weight_scale.to(device=x.device, dtype=torch.float32).reshape(-1)
-    if weight_scale.numel() not in (1, weight.shape[0]):
-        raise ValueError(
-            f"INT8 weight scale must be scalar or per-output-channel, got {tuple(weight_scale.shape)} "
-            f"for weight shape {tuple(weight.shape)}"
-        )
-    if convrot:
-        if x.shape[-1] % convrot_groupsize != 0:
-            raise ValueError(f"ConvRot group size {convrot_groupsize} does not divide input features {x.shape[-1]}")
-        h = _build_hadamard(convrot_groupsize, device=x.device, dtype=x.dtype)
-        x = _rotate_activation(x, h, convrot_groupsize)
-
-    orig_shape = x.shape
-    x_2d = x.reshape(-1, x.shape[-1])
-    x_8, x_scale = eager_quantization.quantize_int8_rowwise(x_2d)
-    m, n = x_8.shape[0], weight.shape[0]
-    accumulator_mib = _int8_accumulator_mib()
-    # Allocator snapshots can synchronize the device and contaminate CUDA-event
-    # timings. Keep detailed INT8 memory tracing and phase timing as exclusive
-    # diagnostic modes; attention-boundary snapshots remain available in the
-    # phase-profile run.
-    trace_this_linear = h3_memory_trace_enabled() and not h3_phase_profile_enabled() and _INT8_TRACE_CALLS < 12
-    _INT8_TRACE_CALLS += 1
-    if trace_this_linear:
-        h3_memory_snapshot(
-            "int8_linear_start",
-            call=trace_call,
-            m=m,
-            k=x_8.shape[1],
-            n=n,
-            accumulator_mib=accumulator_mib,
-            convrot=convrot,
-        )
-    output = torch.empty((m, n), dtype=out_dtype, device=x.device)
-    if trace_this_linear:
-        h3_memory_snapshot(
-            "int8_output_allocated",
-            call=trace_call,
-            output_bytes=output.numel() * output.element_size(),
-        )
-    weight_t = weight.T.contiguous()
-    weight_scale = weight_scale.reshape(1, -1)
-    bias_out = None if bias is None else bias.to(device=x.device, dtype=out_dtype).reshape(1, -1)
-
-    # Default to the measured 128 MiB baseline. Larger canvases can lower this
-    # proactively without changing ConvRot, DTensor, or FSDP semantics.
-    chunk_size = max(1, min(m, accumulator_mib * 1024 * 1024 // (n * 4)))
-    for i in range(0, m, chunk_size):
-        end_i = min(i + chunk_size, m)
-        accumulator = eager_quantization._int8_matmul_accumulate(x_8[i:end_i], weight_t)
-        scaled = accumulator.float()
-        scales = x_scale[i:end_i].to(device=x.device, dtype=torch.float32) * weight_scale
-        scaled.mul_(scales)
-        output[i:end_i].copy_(scaled.to(out_dtype))
-        if bias_out is not None:
-            output[i:end_i].add_(bias_out)
-
-    phase_end = None
-    if profile_this_linear:
-        phase_end = torch.cuda.Event(enable_timing=True)
-        phase_end.record()
-    if trace_this_linear:
-        h3_memory_snapshot("int8_linear_end", call=trace_call, chunk_rows=chunk_size)
-    if profile_this_linear:
-        phase_name = _INT8_PHASE_NAMES.get((x_8.shape[1], n), f"int8_call_{phase_call}")
-        _INT8_PHASE_EVENTS.append((phase_name, phase_start, phase_end))
-        if phase_call == 3:
-            h3_cuda_phase_report(
-                _INT8_PHASE_EVENTS,
-                group="h3_first_block_packed_int8",
-            )
-            _INT8_PHASE_EVENTS.clear()
-    return output.reshape(*orig_shape[:-1], weight.shape[0])
+    if backend != "cuda":
+        raise ValueError(f"MiniMax H3 T4 is CUDA-only; unsupported INT8 backend: {backend!r}")
+    return _profiled_cuda_int8_linear(
+        x=x,
+        weight=weight,
+        weight_scale=weight_scale,
+        bias=bias,
+        out_dtype=out_dtype,
+        convrot=convrot,
+        convrot_groupsize=convrot_groupsize,
+        input_act=input_act,
+    )
 
 
 def _call_cuda_int8_with_oom_retry(
@@ -245,8 +152,8 @@ def _profiled_cuda_int8_linear(
     """Time the four first-block CUDA INT8 calls without per-op synchronization."""
     global _INT8_PHASE_CALLS
 
-    if os.environ.get("H3_T4_INT8_BACKEND", "eager").strip().lower() != "cuda":
-        raise RuntimeError("Eager INT8 requested but Comfy Kitchen selected CUDA backend")
+    if os.environ.get("H3_T4_INT8_BACKEND", "cuda").strip().lower() != "cuda":
+        raise RuntimeError("MiniMax H3 T4 requires the CUDA INT8 backend")
     phase_call = _INT8_PHASE_CALLS
     profile_this_linear = h3_phase_profile_active() and phase_call < 4
     if h3_phase_profile_active():
@@ -639,7 +546,10 @@ def install_int8_cuda_oom_retry(torch_module=torch) -> None:
     """Install the INT8-only FSDP hooks and select ComfyKitchen's CUDA backend."""
     if torch_module is not torch:
         raise TypeError("worker INT8 patches must use the imported torch module")
-    os.environ.setdefault("H3_T4_INT8_BACKEND", "cuda")
+    configured = os.environ.get("H3_T4_INT8_BACKEND", "cuda").strip().lower()
+    if configured != "cuda":
+        raise ValueError(f"MiniMax H3 T4 is CUDA-only; unsupported INT8 backend: {configured!r}")
+    os.environ["H3_T4_INT8_BACKEND"] = "cuda"
     install_int8_patches()
 
 

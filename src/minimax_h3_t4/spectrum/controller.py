@@ -12,6 +12,13 @@ from .config import SpectrumConfig
 from .runtime import SpectrumRuntime, SpectrumStats
 
 
+def spectrum_sampler_is_safe(sampler: Any) -> bool:
+    function = getattr(sampler, "sampler_function", None)
+    name = getattr(function, "__name__", "")
+    options = getattr(sampler, "extra_options", {})
+    return name == "sample_res_multistep" and isinstance(options, dict) and "noise_sampler" not in options
+
+
 class SpectrumController:
     """Own one exact-or-forecast decision for each worker-local H3 call."""
 
@@ -19,8 +26,17 @@ class SpectrumController:
         self.runtime = SpectrumRuntime(config)
         self.adapter = SpectrumStepAdapter(self.runtime)
 
-    def start_run(self, sigmas: torch.Tensor) -> None:
-        self.runtime.start_run(sigmas)
+    def start_run(self, sigmas: torch.Tensor, *, sampler: Any | None = None) -> None:
+        valid = True
+        try:
+            self.runtime.start_run(sigmas)
+        except (RuntimeError, ValueError, TypeError):
+            valid = False
+        if not self.adapter.sync_all(valid):
+            self.runtime.abort_run("Spectrum run initialization failed on one or more ranks")
+            raise RuntimeError("Spectrum run initialization failed on one or more ranks")
+        if sampler is not None and not self.adapter.sync_all(spectrum_sampler_is_safe(sampler)):
+            self.runtime.disable_for_run("sampler is not safe for Spectrum forecasting")
 
     def execute_h3_stack(
         self,
@@ -31,7 +47,7 @@ class SpectrumController:
         exact: Callable[[], torch.Tensor],
     ) -> torch.Tensor:
         try:
-            decision = self.adapter.begin_step(timestep)
+            decision = self.adapter.begin_step(timestep, topology=topology)
             if not decision.actual:
                 predicted = self.adapter.try_forecast(
                     expected_shape=tuple(hidden.shape),
@@ -53,7 +69,18 @@ class SpectrumController:
             raise
 
     def end_run(self) -> SpectrumStats:
-        return self.runtime.end_run()
+        stats: SpectrumStats | None = None
+        valid = True
+        try:
+            stats = self.runtime.end_run()
+        except (RuntimeError, ValueError, TypeError):
+            valid = False
+        if not self.adapter.sync_all(valid):
+            self.runtime.abort_run("Spectrum run completion failed on one or more ranks")
+            raise RuntimeError("Spectrum run completion failed on one or more ranks")
+        if stats is None:  # pragma: no cover - defensive invariant
+            raise RuntimeError("Spectrum run produced no statistics")
+        return stats
 
     def abort_run(self, reason: str) -> None:
         self.runtime.abort_run(reason)

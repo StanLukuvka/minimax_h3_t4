@@ -52,6 +52,60 @@ def test_controller_owns_exact_or_forecast_for_each_h3_call() -> None:
     assert controller.runtime.stats.forecast_steps == 1
 
 
+def test_topology_change_is_detected_before_a_forecast_decision() -> None:
+    controller = _controller()
+    exact_calls = 0
+
+    def execute(step: float, topology: tuple[int, ...]) -> None:
+        nonlocal exact_calls
+
+        def exact() -> torch.Tensor:
+            nonlocal exact_calls
+            exact_calls += 1
+            return torch.zeros((2, 3))
+
+        controller.execute_h3_stack(
+            timestep=step,
+            hidden=torch.zeros((2, 3)),
+            topology=topology,
+            exact=exact,
+        )
+
+    execute(1.0, (2, 3))
+    execute(0.75, (2, 3))
+    execute(0.5, (99, 3))
+
+    assert exact_calls == 3
+    assert controller.runtime.stats.disabled
+
+
+def test_noise_or_ancestry_sampler_fails_closed_to_exact_execution() -> None:
+    controller = SpectrumController(SpectrumConfig(degree=1, max_history=4, warmup_steps=0, tail_actual_steps=0))
+
+    def sample_res_multistep_ancestral():
+        return None
+
+    sampler = type("Sampler", (), {"sampler_function": sample_res_multistep_ancestral, "extra_options": {}})()
+    controller.start_run(torch.linspace(1.0, 0.0, 3), sampler=sampler)
+    calls = 0
+
+    def exact() -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        return torch.zeros((2, 3))
+
+    controller.execute_h3_stack(
+        timestep=1.0,
+        hidden=torch.zeros((2, 3)),
+        topology=(2, 3),
+        exact=exact,
+    )
+
+    assert calls == 1
+    assert controller.runtime.stats.disabled
+    assert controller.runtime.stats.disable_reason == "sampler is not safe for Spectrum forecasting"
+
+
 def test_controller_aborts_and_clears_history_when_exact_h3_fails() -> None:
     controller = _controller()
 

@@ -28,13 +28,14 @@ def _forecast_ready_runtime() -> SpectrumRuntime:
 
 def test_adapter_fails_closed_to_exact_when_any_rank_rejects_forecast() -> None:
     runtime = _forecast_ready_runtime()
+    sync_results = iter((True, True, False))
     adapter = SpectrumStepAdapter(
         runtime,
         sync_mode=lambda _actual: False,
-        sync_all=lambda _valid: False,
+        sync_all=lambda _valid: next(sync_results),
     )
 
-    decision = adapter.begin_step(0.5)
+    decision = adapter.begin_step(0.5, topology=(2, 3))
     assert not decision.actual
     assert adapter.try_forecast(expected_shape=(1, 2, 3), device=torch.device("cpu"), dtype=torch.float32) is None
     assert runtime.current_step is not None
@@ -65,7 +66,7 @@ def test_adapter_returns_valid_prediction_when_all_ranks_agree() -> None:
         sync_all=lambda _valid: True,
     )
 
-    assert not adapter.begin_step(0.5).actual
+    assert not adapter.begin_step(0.5, topology=(2, 3)).actual
     predicted = adapter.try_forecast(expected_shape=(1, 2, 3), device=torch.device("cpu"), dtype=torch.bfloat16)
 
     assert predicted is not None
@@ -82,7 +83,7 @@ def test_adapter_promotes_forecast_to_exact_when_another_rank_requires_actual() 
         sync_all=lambda value: value,
     )
 
-    decision = adapter.begin_step(0.5)
+    decision = adapter.begin_step(0.5, topology=(2, 3))
 
     assert decision.actual
     assert runtime.stats.disabled

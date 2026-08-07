@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import ast
+import types
 from pathlib import Path
 
 import pytest
 
-from src.minimax_h3_t4.runtime.checkpoint import require_int8_state_dict
-from src.minimax_h3_t4.runtime.worker import H3T4Worker, validate_worker_config, zero_noise_like
+from src.minimax_h3_t4.runtime.checkpoint import load_int8_checkpoint_mmap, require_int8_state_dict
+from src.minimax_h3_t4.runtime.worker import (
+    H3T4Worker,
+    reconstruct_nested_x0,
+    validate_worker_config,
+    zero_noise_like,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -60,6 +66,32 @@ def test_checkpoint_accepts_only_comfykitchen_tensorwise_int8() -> None:
     with pytest.raises(ValueError, match="INT8-only"):
         require_int8_state_dict({"block.weight": object()})
 
+    no_convrot = {
+        "block.weight": object(),
+        "block.weight_scale": object(),
+        "block.comfy_quant": b'{"format":"int8_tensorwise","convrot":false}',
+    }
+    with pytest.raises(ValueError, match="ConvRot"):
+        require_int8_state_dict(no_convrot)
+
+
+def test_checkpoint_loader_requires_safetensors_and_uses_cpu_mmap_loader() -> None:
+    calls = []
+
+    def fake_load(path, *, device):
+        calls.append((path, device))
+        return {"weight": "mapped"}
+
+    loaded = load_int8_checkpoint_mmap(
+        "/models/h3.safetensors",
+        load_file=fake_load,
+        metadata_loader=lambda path: {"path": path},
+    )
+    assert loaded == ({"weight": "mapped"}, {"path": "/models/h3.safetensors"})
+    assert calls == [("/models/h3.safetensors", "cpu")]
+    with pytest.raises(ValueError, match="safetensors"):
+        load_int8_checkpoint_mmap("/models/h3.ckpt", load_file=fake_load)
+
 
 def test_zero_noise_preserves_comfy_nested_av_container() -> None:
     class Nested:
@@ -80,6 +112,33 @@ def test_zero_noise_preserves_comfy_nested_av_container() -> None:
 
     assert isinstance(result, Nested)
     assert result.unbind() == ["zero:video", "zero:audio"]
+
+
+def test_flat_callback_x0_is_reconstructed_to_nested_av_shape() -> None:
+    class Nested:
+        is_nested = True
+
+        def __init__(self, tensors):
+            self.tensors = tuple(tensors)
+
+        def unbind(self):
+            return self.tensors
+
+    video = types.SimpleNamespace(shape=(1, 4, 16, 32, 32))
+    audio = types.SimpleNamespace(shape=(1, 8, 64))
+    samples = Nested((video, audio))
+    flat_x0 = types.SimpleNamespace(is_nested=False)
+    calls = []
+
+    rebuilt = reconstruct_nested_x0(
+        samples,
+        flat_x0,
+        nested_type=Nested,
+        unpack_latents=lambda value, shapes: (calls.append((value, shapes)), ("video-x0", "audio-x0"))[1],
+    )
+
+    assert rebuilt.unbind() == ("video-x0", "audio-x0")
+    assert calls == [(flat_x0, [video.shape, audio.shape])]
 
 
 def test_worker_attaches_native_spectrum_to_owned_h3_model() -> None:
@@ -113,6 +172,17 @@ def test_worker_attaches_native_spectrum_to_owned_h3_model() -> None:
 
     assert configured is True
     assert worker.spectrum_controller is getattr(Base.diffusion_model, "_h3_t4_spectrum_controller")
+
+
+def test_disabled_spectrum_config_removes_controller_without_sampling_hooks() -> None:
+    diffusion = types.SimpleNamespace(_h3_t4_spectrum_controller=object())
+    worker = H3T4Worker.__new__(H3T4Worker)
+    worker.model = types.SimpleNamespace(model=types.SimpleNamespace(diffusion_model=diffusion))
+    worker.spectrum_controller = None
+
+    assert worker.configure_spectrum({"enabled": False})
+    assert worker.spectrum_controller is None
+    assert not hasattr(diffusion, "_h3_t4_spectrum_controller")
 
 
 def test_runtime_closure_has_no_donor_or_excluded_model_imports() -> None:

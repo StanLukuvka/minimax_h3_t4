@@ -70,8 +70,29 @@ class SpectrumStepAdapter:
         self.sync_mode = sync_mode
         self.sync_all = sync_all
 
-    def begin_step(self, timestep: torch.Tensor | float) -> StepDecision:
-        decision = self.runtime.begin_step(timestep)
+    def begin_step(self, timestep: torch.Tensor | float, *, topology: tuple[object, ...]) -> StepDecision:
+        topology_valid = False
+        try:
+            topology_valid = self.runtime.check_topology(topology)
+        except (RuntimeError, ValueError, TypeError):
+            topology_valid = False
+        if not self.sync_all(topology_valid):
+            self.runtime.disable_for_run("packed H3 topology was invalid or changed on one or more ranks")
+
+        decision: StepDecision | None = None
+        decision_valid = False
+        try:
+            decision = self.runtime.begin_step(timestep)
+            decision_valid = True
+        except (RuntimeError, ValueError, TypeError):
+            decision_valid = False
+        if not self.sync_all(decision_valid):
+            decision = self.runtime.fail_closed_step(
+                timestep,
+                "Spectrum step initialization failed on one or more ranks",
+            )
+        if decision is None:  # pragma: no cover - defensive invariant
+            raise RuntimeError("Spectrum runtime did not produce a step decision")
         any_actual = self.sync_mode(decision.actual)
         if any_actual and not decision.actual:
             self.runtime.force_actual("another sequence-parallel rank requires exact execution")
@@ -118,4 +139,11 @@ class SpectrumStepAdapter:
             self.runtime.force_actual("actual Spectrum history was invalid on one or more ranks")
 
     def finish_step(self) -> None:
-        self.runtime.finish_step()
+        valid = True
+        try:
+            self.runtime.finish_step()
+        except (RuntimeError, ValueError, TypeError):
+            valid = False
+        if not self.sync_all(valid):
+            self.runtime.abort_run("Spectrum step completion failed on one or more ranks")
+            raise RuntimeError("Spectrum step completion failed on one or more ranks")

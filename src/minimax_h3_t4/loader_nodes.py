@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import gc
+import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .runtime.lifecycle import H3T4ActorGroup, remote, resolve
@@ -18,6 +20,34 @@ def _model_management() -> Any:
     import comfy.model_management
 
     return comfy.model_management
+
+
+def _build_runtime_env() -> dict[str, object]:
+    import folder_paths
+
+    package_dir = Path(__file__).resolve().parent
+    comfy_file = Path(folder_paths.__file__).resolve()
+    comfy_root = next(
+        (parent for parent in comfy_file.parents if (parent / "main.py").exists() and (parent / "execution.py").exists()),
+        None,
+    )
+    if comfy_root is None:
+        raise RuntimeError("Unable to locate the ComfyUI repository root for Ray workers")
+    runtime_workdir = package_dir.parent / "_ray_runtime_env"
+    runtime_workdir.mkdir(parents=True, exist_ok=True)
+    python_entries = [str(comfy_root)]
+    existing = os.environ.get("PYTHONPATH")
+    if existing:
+        python_entries.extend(part for part in existing.split(os.pathsep) if part)
+    return {
+        "py_modules": [str(package_dir)],
+        "working_dir": str(runtime_workdir),
+        "env_vars": {
+            "CUDA_VISIBLE_DEVICES": "0,1",
+            "PYTHONPATH": os.pathsep.join(dict.fromkeys(python_entries)),
+            "COMFYUI_BASE_DIRECTORY": str(comfy_root),
+        },
+    }
 
 
 def _resolve_unet(name: str) -> str:
@@ -55,8 +85,8 @@ class H3T4Initializer:
                     "FLOAT",
                     {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.1},
                 ),
+                "load_after": ("CONDITIONING",),
             },
-            "optional": {"load_after": ("CONDITIONING",)},
         }
 
     RETURN_TYPES = ("H3T4_ACTOR_GROUP",)
@@ -70,10 +100,12 @@ class H3T4Initializer:
         ray_module: Any | None = None,
         model_management: Any | None = None,
         worker_factory: Callable[[int, dict[str, object]], Any] | None = None,
+        runtime_env_builder: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._ray = ray_module
         self._model_management = model_management
         self._worker_factory = worker_factory
+        self._runtime_env_builder = runtime_env_builder or _build_runtime_env
 
     def _create_worker(self, rank: int, config: dict[str, object]) -> Any:
         if self._worker_factory is not None:
@@ -98,20 +130,32 @@ class H3T4Initializer:
         ray_module = self._ray or _ray_module()
         self._ray = ray_module
         model_management = self._model_management or _model_management()
-        if load_after is not None:
-            load_after = None
-            _release_conditioning(model_management)
+        if load_after is None:
+            raise ValueError("MiniMax-H3 initialization requires conditioning connected to load_after")
+        load_after = None
+        _release_conditioning(model_management)
         ray_module.shutdown()
         ray_module.init(
             address="local",
             namespace=ray_cluster_namespace,
             object_store_memory=int(float(ray_object_store_gb) * 1024**3),
             include_dashboard=False,
-            runtime_env={"env_vars": {"CUDA_VISIBLE_DEVICES": "0,1"}},
+            runtime_env=self._runtime_env_builder(),
         )
         topology = ExactH3T4Topology()
         config = topology.as_worker_config()
-        workers = [self._create_worker(rank, config) for rank in range(topology.world_size)]
+        workers: list[Any] = []
+        try:
+            for rank in range(topology.world_size):
+                workers.append(self._create_worker(rank, config))
+        except BaseException as exc:
+            try:
+                H3T4ActorGroup(workers, ray_module, topology).close()
+            except BaseException as close_exc:
+                add_note = getattr(exc, "add_note", None)
+                if callable(add_note):
+                    add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
+            raise
         return (H3T4ActorGroup(workers, ray_module, topology),)
 
 
@@ -160,7 +204,16 @@ class H3T4UNETLoader:
         load_after = None
         _release_conditioning(self._model_management or _model_management())
         path = self._path_resolver(unet_name)
-        for worker in actor_group.workers:
-            resolve(actor_group.ray_module, remote(worker, "load_unet", path, "int8"))
+        try:
+            for worker in actor_group.workers:
+                resolve(actor_group.ray_module, remote(worker, "load_unet", path, "int8"))
+        except BaseException as exc:
+            try:
+                actor_group.close()
+            except BaseException as close_exc:
+                add_note = getattr(exc, "add_note", None)
+                if callable(add_note):
+                    add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
+            raise
         actor_group.checkpoint = path
         return (actor_group,)

@@ -5,7 +5,7 @@ import os
 from datetime import timedelta
 from typing import Any
 
-from .checkpoint import require_int8_state_dict
+from .checkpoint import load_int8_checkpoint_mmap, require_int8_state_dict
 from .topology import ExactH3T4Topology
 
 
@@ -20,6 +20,19 @@ def zero_noise_like(samples: Any, torch_module: Any) -> Any:
     if getattr(samples, "is_nested", False):
         return type(samples)(tuple(torch_module.zeros_like(tensor) for tensor in samples.unbind()))
     return torch_module.zeros_like(samples)
+
+
+def reconstruct_nested_x0(
+    samples: Any,
+    x0: Any,
+    *,
+    nested_type: Any,
+    unpack_latents: Any,
+) -> Any:
+    if getattr(samples, "is_nested", False) and not getattr(x0, "is_nested", False):
+        latent_shapes = [tensor.shape for tensor in samples.unbind()]
+        return nested_type(unpack_latents(x0, latent_shapes))
+    return x0
 
 
 class H3T4Worker:
@@ -39,8 +52,11 @@ class H3T4Worker:
         import torch.distributed as dist
         from xfuser.core.distributed import init_distributed_environment, initialize_model_parallel
 
+        from .int8 import require_tesla_t4
+
         self.device = torch.device("cuda:0")
         torch.cuda.set_device(self.device)
+        require_tesla_t4(torch, self.device)
         if not dist.is_initialized():
             dist.init_process_group(
                 "nccl",
@@ -50,7 +66,7 @@ class H3T4Worker:
                 init_method=(f"tcp://{os.environ.get('MASTER_ADDR', '127.0.0.1')}:{os.environ.get('MASTER_PORT', '29500')}"),
             )
         self.device_mesh = dist.device_mesh.init_device_mesh("cuda", mesh_shape=(2,))
-        init_distributed_environment(rank=self.rank, world_size=2)
+        init_distributed_environment(rank=self.rank, world_size=2, local_rank=0, backend="nccl")
         initialize_model_parallel(
             data_parallel_degree=1,
             sequence_parallel_degree=2,
@@ -75,7 +91,7 @@ class H3T4Worker:
         from .ulysses import inject_minimax_h3_ulysses
 
         install_int8_cuda_oom_retry(torch)
-        state_dict, metadata = comfy.utils.load_torch_file(path, safe_load=True, return_metadata=True)
+        state_dict, metadata = load_int8_checkpoint_mmap(path)
         require_int8_state_dict(state_dict)
         prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
         normalized = comfy.utils.state_dict_prefix_replace(state_dict, {prefix: ""}, filter_keys=True)
@@ -133,11 +149,17 @@ class H3T4Worker:
         from ..spectrum.config import SpectrumConfig
         from ..spectrum.controller import SpectrumController
 
-        controller = SpectrumController(SpectrumConfig(**config))
+        spectrum_config = SpectrumConfig(**config).validate()
         base_model = getattr(self.model, "model", self.model)
         diffusion_model = getattr(base_model, "diffusion_model", None)
         if diffusion_model is None:
             raise RuntimeError("loaded model has no MiniMax-H3 diffusion model")
+        if not spectrum_config.enabled:
+            if hasattr(diffusion_model, "_h3_t4_spectrum_controller"):
+                delattr(diffusion_model, "_h3_t4_spectrum_controller")
+            self.spectrum_controller = None
+            return True
+        controller = SpectrumController(spectrum_config)
         diffusion_model._h3_t4_spectrum_controller = controller
         self.spectrum_controller = controller
         return True
@@ -189,17 +211,21 @@ class H3T4Worker:
         guider.set_conds(guider_spec["positive"])
         x0_output: dict[str, Any] = {}
         if self.spectrum_controller is not None:
-            self.spectrum_controller.start_run(sigmas)
+            self.spectrum_controller.start_run(sigmas, sampler=sampler)
         try:
-            samples = guider.sample(
-                generated_noise,
-                latent_samples,
-                sampler,
-                sigmas,
-                denoise_mask=input_latent.get("noise_mask"),
-                callback=lambda _step, x0, _x, _total: x0_output.update(x0=x0),
-                disable_pbar=self.rank != 0 or not comfy.utils.PROGRESS_BAR_ENABLED,
-                seed=seed,
+            from .int8 import run_with_cuda_int8_backend
+
+            samples = run_with_cuda_int8_backend(
+                lambda: guider.sample(
+                    generated_noise,
+                    latent_samples,
+                    sampler,
+                    sigmas,
+                    denoise_mask=input_latent.get("noise_mask"),
+                    callback=lambda _step, x0, _x, _total: x0_output.update(x0=x0),
+                    disable_pbar=self.rank != 0 or not comfy.utils.PROGRESS_BAR_ENABLED,
+                    seed=seed,
+                )
             )
         except Exception as exc:
             if self.spectrum_controller is not None:
@@ -218,26 +244,46 @@ class H3T4Worker:
         output["samples"] = samples
         denoised = dict(output)
         if "x0" in x0_output:
-            denoised["samples"] = self.model.model.process_latent_out(x0_output["x0"].cpu())
+            import comfy.nested_tensor
+
+            x0 = reconstruct_nested_x0(
+                samples,
+                x0_output["x0"],
+                nested_type=comfy.nested_tensor.NestedTensor,
+                unpack_latents=comfy.utils.unpack_latents,
+            )
+            denoised["samples"] = self.model.model.process_latent_out(x0.cpu())
         return output, denoised
 
-    def shutdown(self) -> bool:
+    def shutdown(self) -> None:
+        import ray
         import torch
         import torch.distributed as dist
 
+        release_error: BaseException | None = None
+        destroy_error: BaseException | None = None
         patcher = self.model
         self.model = None
         self.spectrum_controller = None
-        if patcher is not None:
-            base_model = getattr(patcher, "model", None)
-            if base_model is not None and hasattr(base_model, "current_patcher"):
-                base_model.current_patcher = None
-            try:
+        try:
+            if patcher is not None:
+                base_model = getattr(patcher, "model", None)
+                if base_model is not None and hasattr(base_model, "current_patcher"):
+                    base_model.current_patcher = None
                 patcher.cleanup()
-            except Exception:
-                pass
-        gc.collect()
-        torch.cuda.empty_cache()
-        if dist.is_initialized():
-            dist.destroy_process_group()
-        return True
+            gc.collect()
+            torch.cuda.empty_cache()
+        except BaseException as exc:
+            release_error = exc
+        try:
+            if dist.is_initialized():
+                dist.destroy_process_group()
+        except BaseException as exc:
+            destroy_error = exc
+        if release_error is not None:
+            if destroy_error is not None:
+                raise release_error from destroy_error
+            raise release_error
+        if destroy_error is not None:
+            raise destroy_error
+        ray.actor.exit_actor()
