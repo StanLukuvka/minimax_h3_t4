@@ -23,6 +23,22 @@ FORBIDDEN_TYPES = {
     "RayBasicGuider",
     "XFuserSamplerCustomAdvanced",
 }
+EXPECTED_INPUTS = {
+    "H3T4Initializer": ["load_after"],
+    "H3T4UNETLoader": ["actor_group", "unet_name", "load_after"],
+    "H3T4Spectrum": ["model"],
+    "H3T4BasicScheduler": ["model"],
+    "H3T4BasicGuider": ["model", "conditioning"],
+    "H3T4SamplerAdvanced": ["add_noise", "noise", "guider", "sampler", "sigmas", "latent_image"],
+}
+EXPECTED_WIDGET_COUNTS = {
+    "H3T4Initializer": 3,
+    "H3T4UNETLoader": 1,
+    "H3T4Spectrum": 10,
+    "H3T4BasicScheduler": 3,
+    "H3T4BasicGuider": 0,
+    "H3T4SamplerAdvanced": 1,
+}
 
 
 def find_sampling_graph(value):
@@ -76,4 +92,9 @@ def test_standalone_workflow_uses_only_registered_h3_t4_nodes(filename: str, spe
     assert CUSTOM_TYPES - ({"H3T4Spectrum"} if not spectrum else set()) <= node_types
     assert ("H3T4Spectrum" in node_types) is spectrum
     assert "RandomNoise" in node_types
+    for node in graph["nodes"]:
+        node_type = node["type"]
+        if node_type in EXPECTED_INPUTS:
+            assert [spec["name"] for spec in node.get("inputs", [])] == EXPECTED_INPUTS[node_type]
+            assert len(node.get("widgets_values", [])) == EXPECTED_WIDGET_COUNTS[node_type]
     validate_links(graph)
