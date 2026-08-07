@@ -6,13 +6,16 @@ four required model files attached as Kaggle input datasets.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 APP_ROOT = Path(os.environ.get("H3_T4_APP_ROOT", "/kaggle/working/minimax-h3-t4"))
 COMFY_DIR = APP_ROOT / "ComfyUI"
@@ -28,6 +31,10 @@ EXTENSION_REPO = os.environ.get(
 EXTENSION_REF = os.environ.get("H3_T4_EXTENSION_REF", "main")
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
+ENABLE_CLOUDFLARE = os.environ.get("H3_T4_ENABLE_CLOUDFLARE", "0") == "1"
+CLOUDFLARED = APP_ROOT / "cloudflared"
+CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64"
+CLOUDFLARED_SHA256 = "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17"
 
 PINNED_RUNTIME = (
     "transformers==5.0.0",
@@ -127,6 +134,47 @@ def wait_for_port(port: int, timeout: float = 900.0) -> None:
     raise TimeoutError(f"ComfyUI did not open port {port} within {timeout:.0f}s")
 
 
+def ensure_cloudflared() -> Path:
+    if CLOUDFLARED.exists():
+        digest = hashlib.sha256(CLOUDFLARED.read_bytes()).hexdigest()
+        if digest == CLOUDFLARED_SHA256:
+            return CLOUDFLARED
+        CLOUDFLARED.unlink()
+    data = urllib.request.urlopen(CLOUDFLARED_URL, timeout=120).read()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != CLOUDFLARED_SHA256:
+        raise RuntimeError(f"cloudflared checksum mismatch: {digest}")
+    CLOUDFLARED.write_bytes(data)
+    CLOUDFLARED.chmod(0o755)
+    return CLOUDFLARED
+
+
+def start_cloudflare(port: int) -> tuple[subprocess.Popen[bytes], str]:
+    binary = ensure_cloudflared()
+    log_path = APP_ROOT / "cloudflared.log"
+    log_handle = log_path.open("wb")
+    process = subprocess.Popen(
+        [str(binary), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + 90.0
+    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            log_handle.close()
+            raise RuntimeError(f"cloudflared exited early; see {log_path}")
+        text = log_path.read_text(errors="replace") if log_path.exists() else ""
+        match = pattern.search(text)
+        if match:
+            log_handle.close()
+            return process, match.group(0)
+        time.sleep(1.0)
+    process.terminate()
+    log_handle.close()
+    raise TimeoutError(f"cloudflared did not publish a URL; see {log_path}")
+
+
 def start() -> subprocess.Popen[bytes]:
     command = [
         str(PYTHON),
@@ -149,3 +197,6 @@ def start() -> subprocess.Popen[bytes]:
 if __name__ == "__main__":
     install()
     COMFY_PROCESS = start()
+    if ENABLE_CLOUDFLARE:
+        CLOUDFLARE_PROCESS, COMFY_URL = start_cloudflare(PORT)
+        print("Public ComfyUI URL:", COMFY_URL)

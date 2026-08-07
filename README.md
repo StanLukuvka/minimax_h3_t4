@@ -78,6 +78,8 @@ This dependency ordering ensures that the large conditioning model and condition
 
 The Kaggle entry defaults to the proven ComfyUI commit. Before publishing a reproducible notebook, set `H3_T4_EXTENSION_REF` to a full release commit rather than `main`.
 
+Kaggle does not expose notebook ports directly. Setting `H3_T4_ENABLE_CLOUDFLARE=1` enables the script's checksum-pinned Cloudflare quick tunnel, but that URL is unauthenticated and should be treated as temporary public access. The tunnel is disabled by default.
+
 ## Spectrum defaults
 
 The defaults reproduce the proven conservative configuration:

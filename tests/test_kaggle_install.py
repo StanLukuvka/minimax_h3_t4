@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import hashlib
 import pytest
 
 
@@ -35,6 +36,22 @@ def test_kaggle_installer_requires_exactly_two_t4s(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="exactly two Tesla T4"):
         module.require_two_t4s()
+
+
+def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    payload = b"pinned cloudflared test binary"
+    target = tmp_path / "cloudflared"
+    monkeypatch.setattr(module, "CLOUDFLARED", target)
+    monkeypatch.setattr(module, "CLOUDFLARED_SHA256", hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: SimpleNamespace(read=lambda: payload),
+    )
+
+    assert module.ensure_cloudflared() == target
+    assert target.read_bytes() == payload
 
 
 def test_kaggle_installer_has_no_donor_plugin_installation() -> None:
