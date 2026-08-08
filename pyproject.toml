@@ -44,7 +44,7 @@ Repository = "https://github.com/StanLukuvka/minimax_h3_t4"
 includes = []
 
 [tool.setuptools.package-data]
-"minimax_h3_t4" = ["workflows/*.json", "notebooks/*.py"]
+"minimax_h3_t4" = ["workflows/*.json", "notebooks/*.py", "notebooks/*.ipynb"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

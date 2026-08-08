@@ -5,7 +5,7 @@ include licenses/Apache-2.0.txt
 include README.md
 include SCAFFOLD.md
 
-recursive-include notebooks *.py
+recursive-include notebooks *.py *.ipynb
 recursive-include workflows *.json
 recursive-include web/docs *.md
 recursive-exclude * __pycache__

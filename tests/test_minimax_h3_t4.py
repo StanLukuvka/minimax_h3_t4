@@ -10,12 +10,8 @@ from src.minimax_h3_t4.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPI
 
 
 EXPECTED_NODES = {
-    "H3T4Initializer",
-    "H3T4UNETLoader",
-    "H3T4Spectrum",
-    "H3T4BasicScheduler",
-    "H3T4BasicGuider",
-    "H3T4SamplerAdvanced",
+    "H3T4Loader",
+    "H3T4Sampler",
 }
 
 
@@ -39,7 +35,7 @@ def test_git_clone_entry_point_uses_ray_importable_worker_module() -> None:
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
-        worker_module = module.NODE_CLASS_MAPPINGS["H3T4Initializer"].__module__
+        worker_module = module.NODE_CLASS_MAPPINGS["H3T4Loader"].__module__
         assert worker_module.startswith("minimax_h3_t4.")
     finally:
         sys.modules.pop(spec.name, None)

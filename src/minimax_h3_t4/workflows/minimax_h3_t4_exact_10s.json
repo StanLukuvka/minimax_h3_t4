@@ -156,9 +156,9 @@
       },
       "widgets_values": [
         "Realistic live-action cinematic look, action movie trailer: practical film photography style, a post-rain dusk metropolis, anamorphic lens, shallow depth of field, film grain, city volumetric fog, flying-car traffic between the towers, restrained grading for a premium feel, powerful natural movement.\n\nScene overview: at dusk on a cluster of skyscrapers, the protagonist is being chased, sprinting and leaping across rooftops, jumping from one building's roof to the next with pursuers closing in behind. This is the escape sequence of an action movie trailer: every leap is life-or-death, thrilling and fluid.\n\nStoryboard (each shot a separate scene, rapid cuts, all landing on the musical beats):\n[0s-1.5s] Shot 1: high side angle: the protagonist sprinting at the roof edge, pursuers appearing in the rooftop doorway behind him, wind catching his coat.\n[1s-2.5s] Shot 2: the protagonist leaps across the gap between buildings, body stretching mid-air, towers and flying-car light trails behind him, a slight slow-motion feel.\n[2.5s-4s] Shot 3: he lands, rolls and rises, low-angle shot, tower shadows and fog behind him, he keeps running.\n[4s-5s] Shot 4: freeze: the instant he hits the edge of the next roof and launches into the jump, silhouette, holding.\n\nCamera: each shot its own angle, cuts clean and hard, no dissolves, a slight frame jitter on the jumps.\n\nAudio: wind, rapid footsteps, city ambience, low score underneath, an accent hit on each leap, the score bursting at 4s, closing the last 1s.\n\nNo text, subtitles, logos or watermarks of any kind, no animation or cartoon rendering, no overly-CG look, keep the live-action texture.",
-        736,
-        416,
-        5,
+        512,
+        288,
+        10,
         556589502035082,
         "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
@@ -840,9 +840,9 @@
             },
             "widgets_values": [
               "A single red ball rolls from left to right across a plain studio floor. Locked camera, one continuous shot, no text or cuts. Simple natural rolling sound.",
-              736,
-              416,
-              124
+              512,
+              288,
+              243
             ]
           },
           {

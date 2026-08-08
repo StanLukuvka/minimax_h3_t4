@@ -148,7 +148,7 @@ def wait_for_port(port: int, timeout: float = 900.0) -> None:
 
 
 def validate_readiness(port: int) -> None:
-    probe = "import minimax_h3_t4, ray, safetensors, xfuser, yunchang; assert 'H3T4Initializer' in minimax_h3_t4.NODE_CLASS_MAPPINGS"
+    probe = "import minimax_h3_t4, ray, safetensors, xfuser, yunchang; assert set(minimax_h3_t4.NODE_CLASS_MAPPINGS) == {'H3T4Loader', 'H3T4Sampler'}"
     run(PYTHON, "-c", probe, cwd=COMFY_DIR)
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/system_stats", timeout=30) as response:
         system_stats = json.load(response)
@@ -156,19 +156,17 @@ def validate_readiness(port: int) -> None:
         raise RuntimeError("ComfyUI /system_stats did not return an object")
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/object_info", timeout=30) as response:
         object_info = json.load(response)
-    required_nodes = {
-        "H3T4Initializer",
-        "H3T4UNETLoader",
-        "H3T4Spectrum",
-        "H3T4BasicScheduler",
-        "H3T4BasicGuider",
-        "H3T4SamplerAdvanced",
-    }
+    required_nodes = {"H3T4Loader", "H3T4Sampler"}
     missing_nodes = sorted(required_nodes.difference(object_info))
     if missing_nodes:
         raise RuntimeError(f"ComfyUI did not register required MiniMax-H3 nodes: {missing_nodes}")
     workflow_dir = COMFY_DIR / "user" / "default" / "workflows"
-    required_workflows = {"minimax_h3_t4_exact.json", "minimax_h3_t4_spectrum.json"}
+    required_workflows = {
+        "minimax_h3_t4_exact.json",
+        "minimax_h3_t4_spectrum.json",
+        "minimax_h3_t4_exact_10s.json",
+        "minimax_h3_t4_spectrum_10s.json",
+    }
     missing_workflows = sorted(name for name in required_workflows if not (workflow_dir / name).is_file())
     if missing_workflows:
         raise RuntimeError(f"Kaggle workflows were not installed: {missing_workflows}")

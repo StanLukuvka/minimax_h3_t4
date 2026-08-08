@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from src.minimax_h3_t4.nodes import H3T4Initializer, H3T4UNETLoader
+from src.minimax_h3_t4.loader_nodes import H3T4Initializer, H3T4UNETLoader
 from src.minimax_h3_t4.runtime.lifecycle import H3T4ActorGroup
 from src.minimax_h3_t4.runtime.topology import ExactH3T4Topology
 from src.minimax_h3_t4.sampler_nodes import H3T4BasicGuider, H3T4BasicScheduler, H3T4SamplerAdvanced

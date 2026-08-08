@@ -24,16 +24,12 @@ The initial release intentionally excludes EasyCache, TeaCache, combined cache m
 
 ## Nodes
 
-The extension registers six focused nodes:
+The extension registers exactly two nodes:
 
-- **MiniMax H3 T4 Initializer** — starts the fixed local two-worker Ray group after conditioning memory is released.
-- **MiniMax H3 T4 Loader** — sequentially maps the INT8 checkpoint onto rank 0 and then rank 1.
-- **MiniMax H3 T4 Spectrum** — configures the worker-local Spectrum forecaster. Bypass this node for exact execution.
-- **MiniMax H3 T4 Scheduler** — calculates the sigma schedule using the worker-owned model.
-- **MiniMax H3 T4 Guider** — binds MiniMax H3 conditioning to the distributed model.
-- **MiniMax H3 T4 Sampler** — runs both ranks, performs bounded teardown, and returns the video/audio latent pair.
+- **MiniMax H3 T4 Loader** — releases parent ComfyUI model memory, starts the fixed two-worker runtime, sequentially maps the INT8 checkpoint onto rank 0 then rank 1, and applies either the Exact or frozen Spectrum profile.
+- **MiniMax H3 T4 Sampler** — owns noise, sampler selection, scheduling, guidance, distributed execution, and bounded confirmed worker teardown before returning ordinary video/audio latents.
 
-Stock ComfyUI nodes remain responsible for CLIP loading, `MiniMaxH3ImageToVideo`, sampler selection, VAE loading and decoding, and video output.
+Ray, NCCL, FSDP, Ulysses, GPU assignment, object-store sizing, and Spectrum tuning are implementation details rather than workflow settings. Stock ComfyUI remains responsible for CLIP loading, `MiniMaxH3ImageToVideo`, parent-process VAE loading and decoding, and video output.
 
 Spectrum forecasting is admitted only for the frozen, reviewed `sample_euler`, `sample_res_multistep`, and `sample_res_multistep_cfg_pp` functions. Ancestral samplers, Euler with positive or invalid `s_churn`, aliases, and custom samplers execute exactly. Forecasts never occur consecutively; RES samplers enforce at least three final exact steps.
 
@@ -63,23 +59,27 @@ PyTorch, ComfyKitchen, and the MiniMax H3 model implementation are supplied by t
 
 ## Workflow ordering
 
-Connect the conditioning output to both `load_after` inputs:
+Connect the stock conditioning output to both public nodes:
 
 ```text
-MiniMaxH3ImageToVideo ──┬──> MiniMax H3 T4 Initializer
-                        └──> MiniMax H3 T4 Loader
+MiniMaxH3ImageToVideo ──┬──> MiniMax H3 T4 Loader ──> MiniMax H3 T4 Sampler
+                        └────────────────────────────> MiniMax H3 T4 Sampler
 
-Initializer -> Loader -> [optional Spectrum] -> Scheduler / Guider -> Sampler
-Sampler -> parent-process VAE decode -> video output
+MiniMax H3 T4 Sampler -> confirmed worker death -> parent VAE decode -> video output
 ```
 
-This dependency ordering ensures that the large conditioning model and conditioning-time VAE finish before the two denoiser workers begin sequential checkpoint loading.
+This dependency ordering lets ComfyUI unload parent models before the two denoiser workers begin sequential checkpoint loading. FSDP shards remain worker-local and are never handed to stock per-layer CPU offloading; the safe distributed unload operation is confirmed actor teardown.
 
 ## Included workflows and Kaggle entry
 
-- `workflows/minimax_h3_t4_exact.json` — immutable exact control path.
-- `workflows/minimax_h3_t4_spectrum.json` — native Spectrum path with the conservative defaults below.
-- `notebooks/kaggle_install.py` — checks for exactly two T4 GPUs, installs pinned ComfyUI/runtime dependencies, links attached model datasets, installs both workflows, and starts ComfyUI.
+- `workflows/minimax_h3_t4_exact.json` — 124-frame exact control workflow.
+- `workflows/minimax_h3_t4_spectrum.json` — 124-frame native Spectrum workflow.
+- `workflows/minimax_h3_t4_exact_10s.json` — experimental `512×288×243` (10.125-second) exact workflow.
+- `workflows/minimax_h3_t4_spectrum_10s.json` — experimental `512×288×243` Spectrum workflow.
+- `notebooks/minimax_h3_t4_kaggle.ipynb` — directly runnable Kaggle notebook containing the versioned installer.
+- `notebooks/kaggle_install.py` — authoritative installer source used by the notebook.
+
+The 243-frame workflows are structurally valid and fall inside MiniMax H3's documented trained frame range, but they have not yet passed standalone two-T4 hardware acceptance. They are experiments, not accepted performance claims.
 
 The Kaggle entry defaults to the proven ComfyUI commit. It intentionally refuses mutable or missing extension coordinates: set `H3_T4_EXTENSION_REPO_URL` to the published repository and `H3_T4_EXTENSION_REF` to a full release commit.
 

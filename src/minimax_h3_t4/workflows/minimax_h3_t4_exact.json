@@ -156,8 +156,8 @@
       },
       "widgets_values": [
         "Realistic live-action cinematic look, action movie trailer: practical film photography style, a post-rain dusk metropolis, anamorphic lens, shallow depth of field, film grain, city volumetric fog, flying-car traffic between the towers, restrained grading for a premium feel, powerful natural movement.\n\nScene overview: at dusk on a cluster of skyscrapers, the protagonist is being chased, sprinting and leaping across rooftops, jumping from one building's roof to the next with pursuers closing in behind. This is the escape sequence of an action movie trailer: every leap is life-or-death, thrilling and fluid.\n\nStoryboard (each shot a separate scene, rapid cuts, all landing on the musical beats):\n[0s-1.5s] Shot 1: high side angle: the protagonist sprinting at the roof edge, pursuers appearing in the rooftop doorway behind him, wind catching his coat.\n[1s-2.5s] Shot 2: the protagonist leaps across the gap between buildings, body stretching mid-air, towers and flying-car light trails behind him, a slight slow-motion feel.\n[2.5s-4s] Shot 3: he lands, rolls and rises, low-angle shot, tower shadows and fog behind him, he keeps running.\n[4s-5s] Shot 4: freeze: the instant he hits the edge of the next roof and launches into the jump, silhouette, holding.\n\nCamera: each shot its own angle, cuts clean and hard, no dissolves, a slight frame jitter on the jumps.\n\nAudio: wind, rapid footsteps, city ambience, low score underneath, an accent hit on each leap, the score bursting at 4s, closing the last 1s.\n\nNo text, subtitles, logos or watermarks of any kind, no animation or cartoon rendering, no overly-CG look, keep the live-action texture.",
-        1344,
-        768,
+        736,
+        416,
         5,
         556589502035082,
         "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -274,7 +274,7 @@
         "state": {
           "lastGroupId": 4,
           "lastNodeId": 119,
-          "lastLinkId": 232,
+          "lastLinkId": 233,
           "lastRerouteId": 0
         },
         "revision": 0,
@@ -641,240 +641,6 @@
             "widgets_values": []
           },
           {
-            "id": 17,
-            "type": "KSamplerSelect",
-            "pos": [
-              -790,
-              4910
-            ],
-            "size": [
-              370,
-              70
-            ],
-            "flags": {},
-            "order": 0,
-            "mode": 0,
-            "inputs": [],
-            "outputs": [
-              {
-                "localized_name": "SAMPLER",
-                "name": "SAMPLER",
-                "type": "SAMPLER",
-                "links": [
-                  16
-                ]
-              }
-            ],
-            "properties": {
-              "Node name for S&R": "KSamplerSelect"
-            },
-            "widgets_values": [
-              "res_multistep"
-            ]
-          },
-          {
-            "id": 9,
-            "type": "H3T4BasicScheduler",
-            "pos": [
-              -790,
-              5030
-            ],
-            "size": [
-              370,
-              130
-            ],
-            "flags": {},
-            "order": 2,
-            "mode": 0,
-            "inputs": [
-              {
-                "name": "model",
-                "type": "H3T4_MODEL",
-                "link": 231
-              }
-            ],
-            "outputs": [
-              {
-                "name": "SIGMAS",
-                "type": "SIGMAS",
-                "links": [
-                  18
-                ]
-              }
-            ],
-            "properties": {
-              "Node name for S&R": "H3T4BasicScheduler"
-            },
-            "widgets_values": [
-              "simple",
-              20,
-              1.0
-            ]
-          },
-          {
-            "id": 14,
-            "type": "H3T4SamplerAdvanced",
-            "pos": [
-              -360,
-              4820
-            ],
-            "size": [
-              250,
-              160
-            ],
-            "flags": {},
-            "order": 6,
-            "mode": 0,
-            "inputs": [
-              {
-                "name": "add_noise",
-                "type": "BOOLEAN",
-                "widget": {
-                  "name": "add_noise"
-                },
-                "link": null
-              },
-              {
-                "name": "noise",
-                "type": "NOISE",
-                "link": 232
-              },
-              {
-                "name": "guider",
-                "type": "H3T4_GUIDER",
-                "link": 12
-              },
-              {
-                "name": "sampler",
-                "type": "SAMPLER",
-                "link": 16
-              },
-              {
-                "name": "sigmas",
-                "type": "SIGMAS",
-                "link": 18
-              },
-              {
-                "name": "latent_image",
-                "type": "LATENT",
-                "link": 188
-              }
-            ],
-            "outputs": [
-              {
-                "name": "output",
-                "type": "LATENT",
-                "links": [
-                  225,
-                  226
-                ]
-              },
-              {
-                "name": "denoised_output",
-                "type": "LATENT",
-                "links": null
-              }
-            ],
-            "properties": {
-              "Node name for S&R": "H3T4SamplerAdvanced"
-            },
-            "widgets_values": [
-              true
-            ]
-          },
-          {
-            "id": 16,
-            "type": "H3T4BasicGuider",
-            "pos": [
-              -790,
-              4800
-            ],
-            "size": [
-              360,
-              70
-            ],
-            "flags": {},
-            "order": 8,
-            "mode": 0,
-            "inputs": [
-              {
-                "name": "model",
-                "type": "H3T4_MODEL",
-                "link": 193
-              },
-              {
-                "name": "conditioning",
-                "type": "CONDITIONING",
-                "link": 187
-              }
-            ],
-            "outputs": [
-              {
-                "name": "guider",
-                "type": "H3T4_GUIDER",
-                "links": [
-                  12
-                ]
-              }
-            ],
-            "properties": {
-              "Node name for S&R": "H3T4BasicGuider"
-            },
-            "widgets_values": []
-          },
-          {
-            "id": 6,
-            "type": "H3T4UNETLoader",
-            "pos": [
-              -2020,
-              4630
-            ],
-            "size": [
-              600,
-              110
-            ],
-            "flags": {},
-            "order": 1,
-            "mode": 0,
-            "inputs": [
-              {
-                "name": "actor_group",
-                "type": "H3T4_ACTOR_GROUP",
-                "link": 228
-              },
-              {
-                "name": "unet_name",
-                "type": "COMBO",
-                "widget": {
-                  "name": "unet_name"
-                },
-                "link": 221
-              },
-              {
-                "name": "load_after",
-                "shape": 7,
-                "type": "CONDITIONING",
-                "link": 229
-              }
-            ],
-            "outputs": [
-              {
-                "name": "model",
-                "type": "H3T4_MODEL",
-                "links": [
-                  231,
-                  193
-                ]
-              }
-            ],
-            "properties": {
-              "Node name for S&R": "H3T4UNETLoader"
-            },
-            "widgets_values": [
-              "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
-            ]
-          },
-          {
             "id": 13,
             "type": "CLIPLoader",
             "pos": [
@@ -1057,8 +823,7 @@
                 "type": "CONDITIONING",
                 "links": [
                   187,
-                  229,
-                  230
+                  229
                 ]
               },
               {
@@ -1186,84 +951,125 @@
             ]
           },
           {
-            "id": 112,
-            "type": "H3T4Initializer",
+            "id": 6,
+            "type": "H3T4Loader",
             "pos": [
-              -2390,
-              4440
+              -2100,
+              4480
             ],
             "size": [
-              420,
-              100
+              600,
+              120
             ],
             "flags": {},
-            "order": 0,
+            "order": 1,
             "mode": 0,
             "inputs": [
+              {
+                "name": "unet_name",
+                "type": "COMBO",
+                "widget": {
+                  "name": "unet_name"
+                },
+                "link": 221
+              },
+              {
+                "name": "acceleration",
+                "type": "COMBO",
+                "widget": {
+                  "name": "acceleration"
+                },
+                "link": null
+              },
               {
                 "name": "load_after",
                 "shape": 7,
                 "type": "CONDITIONING",
-                "link": 230
+                "link": 229
               }
             ],
             "outputs": [
               {
-                "name": "actor_group",
-                "type": "H3T4_ACTOR_GROUP",
+                "name": "model",
+                "type": "H3T4_MODEL",
                 "links": [
-                  228
+                  233
                 ]
               }
             ],
             "properties": {
-              "Node name for S&R": "H3T4Initializer"
+              "Node name for S&R": "H3T4Loader"
             },
             "widgets_values": [
-              "minimax-h3-t4",
-              "0,1",
-              0.5
+              "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+              "Exact"
             ]
           },
           {
-            "id": 119,
-            "type": "RandomNoise",
+            "id": 14,
+            "type": "H3T4Sampler",
             "pos": [
-              -650,
-              4660
+              -720,
+              4750
             ],
             "size": [
-              260,
-              80
+              420,
+              260
             ],
             "flags": {},
-            "order": 5,
+            "order": 6,
             "mode": 0,
             "inputs": [
               {
-                "name": "noise_seed",
+                "name": "model",
+                "type": "H3T4_MODEL",
+                "link": 233
+              },
+              {
+                "name": "conditioning",
+                "type": "CONDITIONING",
+                "link": 187
+              },
+              {
+                "name": "latent_image",
+                "type": "LATENT",
+                "link": 188
+              },
+              {
+                "name": "seed",
                 "type": "INT",
                 "widget": {
-                  "name": "noise_seed"
+                  "name": "seed"
                 },
                 "link": 207
               }
             ],
             "outputs": [
               {
-                "name": "noise",
-                "type": "NOISE",
+                "name": "output",
+                "type": "LATENT",
                 "links": [
-                  232
+                  225,
+                  226
                 ]
+              },
+              {
+                "name": "denoised_output",
+                "type": "LATENT",
+                "links": null
               }
             ],
             "properties": {
-              "Node name for S&R": "RandomNoise"
+              "Node name for S&R": "H3T4Sampler"
             },
             "widgets_values": [
               1,
-              "randomize"
+              "randomize",
+              "res_multistep",
+              "simple",
+              20,
+              1.0,
+              true
             ]
           }
         ],
@@ -1335,50 +1141,18 @@
             "type": "VAE"
           },
           {
-            "id": 12,
-            "origin_id": 16,
-            "origin_slot": 0,
-            "target_id": 14,
-            "target_slot": 2,
-            "type": "H3T4_GUIDER"
-          },
-          {
-            "id": 16,
-            "origin_id": 17,
-            "origin_slot": 0,
-            "target_id": 14,
-            "target_slot": 3,
-            "type": "SAMPLER"
-          },
-          {
-            "id": 18,
-            "origin_id": 9,
-            "origin_slot": 0,
-            "target_id": 14,
-            "target_slot": 4,
-            "type": "SIGMAS"
-          },
-          {
             "id": 188,
             "origin_id": 104,
             "origin_slot": 1,
             "target_id": 14,
-            "target_slot": 5,
+            "target_slot": 2,
             "type": "LATENT"
-          },
-          {
-            "id": 193,
-            "origin_id": 6,
-            "origin_slot": 0,
-            "target_id": 16,
-            "target_slot": 0,
-            "type": "H3T4_MODEL"
           },
           {
             "id": 187,
             "origin_id": 104,
             "origin_slot": 0,
-            "target_id": 16,
+            "target_id": 14,
             "target_slot": 1,
             "type": "CONDITIONING"
           },
@@ -1490,8 +1264,8 @@
             "id": 207,
             "origin_id": -10,
             "origin_slot": 6,
-            "target_id": 119,
-            "target_slot": 0,
+            "target_id": 14,
+            "target_slot": 3,
             "type": "INT"
           },
           {
@@ -1499,7 +1273,7 @@
             "origin_id": -10,
             "origin_slot": 7,
             "target_id": 6,
-            "target_slot": 1,
+            "target_slot": 0,
             "type": "COMBO"
           },
           {
@@ -1543,22 +1317,6 @@
             "type": "COMBO"
           },
           {
-            "id": 231,
-            "origin_id": 6,
-            "origin_slot": 0,
-            "target_id": 9,
-            "target_slot": 0,
-            "type": "H3T4_MODEL"
-          },
-          {
-            "id": 228,
-            "origin_id": 112,
-            "origin_slot": 0,
-            "target_id": 6,
-            "target_slot": 0,
-            "type": "H3T4_ACTOR_GROUP"
-          },
-          {
             "id": 229,
             "origin_id": 104,
             "origin_slot": 0,
@@ -1567,20 +1325,12 @@
             "type": "CONDITIONING"
           },
           {
-            "id": 230,
-            "origin_id": 104,
-            "origin_slot": 0,
-            "target_id": 112,
-            "target_slot": 0,
-            "type": "CONDITIONING"
-          },
-          {
-            "id": 232,
-            "origin_id": 119,
+            "id": 233,
+            "origin_id": 6,
             "origin_slot": 0,
             "target_id": 14,
-            "target_slot": 1,
-            "type": "NOISE"
+            "target_slot": 0,
+            "type": "H3T4_MODEL"
           }
         ],
         "extra": {}

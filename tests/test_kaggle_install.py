@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,6 +66,15 @@ def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) ->
 
     assert module.ensure_cloudflared() == target
     assert target.read_bytes() == payload
+
+
+def test_kaggle_notebook_executes_the_versioned_installer() -> None:
+    notebook_path = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
+    notebook = json.loads(notebook_path.read_text())
+    code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+
+    assert len(code_cells) == 1
+    assert "".join(code_cells[0]["source"]).rstrip() == SCRIPT.read_text().rstrip()
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
