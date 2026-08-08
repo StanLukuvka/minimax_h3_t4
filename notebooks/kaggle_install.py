@@ -21,8 +21,7 @@ import urllib.request
 APP_ROOT = Path(os.environ.get("H3_T4_APP_ROOT", "/kaggle/working/minimax-h3-t4"))
 COMFY_DIR = APP_ROOT / "ComfyUI"
 EXTENSION_DIR = COMFY_DIR / "custom_nodes" / "minimax_h3_t4"
-VENV_DIR = APP_ROOT / "venv"
-PYTHON = VENV_DIR / "bin" / "python"
+PYTHON = Path(os.environ.get("H3_T4_PYTHON", sys.executable))
 COMFY_REPO = os.environ.get("COMFY_REPO_URL", "https://github.com/Comfy-Org/ComfyUI.git")
 COMFY_REF = os.environ.get("COMFY_COMMIT", "9a9fdb10ed144ce760d9682cb247526ea23cc525")
 EXTENSION_REPO = os.environ.get(
@@ -128,8 +127,6 @@ def install() -> None:
     APP_ROOT.mkdir(parents=True, exist_ok=True)
     checkout(COMFY_REPO, COMFY_DIR, COMFY_REF)
     checkout(EXTENSION_REPO, EXTENSION_DIR, EXTENSION_REF)
-    if not PYTHON.exists():
-        run(sys.executable, "-m", "venv", "--system-site-packages", VENV_DIR)
     run(PYTHON, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
     run(PYTHON, "-m", "pip", "install", "-r", COMFY_DIR / "requirements.txt")
     run(PYTHON, "-m", "pip", "install", "--upgrade", *PINNED_RUNTIME)
