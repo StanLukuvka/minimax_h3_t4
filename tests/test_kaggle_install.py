@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import hashlib
@@ -55,11 +54,13 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     assert module.EXTENSION_REF == "7e9e992b9d40a7b7852a6196579c5330908a474d"
 
 
-def test_kaggle_installer_uses_the_kernel_python_without_ensurepip_venv(monkeypatch) -> None:
+def test_kaggle_installer_bootstraps_virtualenv_without_stdlib_ensurepip(monkeypatch) -> None:
     monkeypatch.delenv("H3_T4_PYTHON", raising=False)
     module = load_script()
-    assert module.PYTHON == Path(sys.executable)
-    assert '"-m", "venv"' not in SCRIPT.read_text()
+    assert module.PYTHON == module.VENV_DIR / "bin" / "python"
+    source = SCRIPT.read_text()
+    assert '"virtualenv"' in source
+    assert '"-m", "venv"' not in source
 
 
 def test_kaggle_installer_preserves_extension_environment_overrides(monkeypatch) -> None:

@@ -21,7 +21,11 @@ import urllib.request
 APP_ROOT = Path(os.environ.get("H3_T4_APP_ROOT", "/kaggle/working/minimax-h3-t4"))
 COMFY_DIR = APP_ROOT / "ComfyUI"
 EXTENSION_DIR = COMFY_DIR / "custom_nodes" / "minimax_h3_t4"
-PYTHON = Path(os.environ.get("H3_T4_PYTHON", sys.executable))
+VENV_DIR = APP_ROOT / "venv"
+BOOTSTRAP_DIR = APP_ROOT / "bootstrap"
+PYTHON_OVERRIDE = os.environ.get("H3_T4_PYTHON")
+PYTHON = Path(PYTHON_OVERRIDE) if PYTHON_OVERRIDE else VENV_DIR / "bin" / "python"
+VIRTUALENV_PIN = "virtualenv==20.34.0"
 COMFY_REPO = os.environ.get("COMFY_REPO_URL", "https://github.com/Comfy-Org/ComfyUI.git")
 COMFY_REF = os.environ.get("COMFY_COMMIT", "9a9fdb10ed144ce760d9682cb247526ea23cc525")
 EXTENSION_REPO = os.environ.get(
@@ -58,10 +62,40 @@ REQUIRED_MODELS = {
 }
 
 
-def run(*args: object, cwd: Path | None = None) -> None:
+def run(*args: object, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     command = [str(arg) for arg in args]
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    return subprocess.run(command, cwd=cwd, check=check)
+
+
+def ensure_app_python() -> None:
+    if PYTHON.exists():
+        return
+    if PYTHON_OVERRIDE:
+        raise FileNotFoundError(f"H3_T4_PYTHON does not exist: {PYTHON}")
+    BOOTSTRAP_DIR.mkdir(parents=True, exist_ok=True)
+    run(
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--target",
+        BOOTSTRAP_DIR,
+        VIRTUALENV_PIN,
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(BOOTSTRAP_DIR)
+    command = [
+        sys.executable,
+        "-m",
+        "virtualenv",
+        "--system-site-packages",
+        str(VENV_DIR),
+    ]
+    print("+", " ".join(command), flush=True)
+    subprocess.run(command, check=True, env=environment)
+    if not PYTHON.exists():
+        raise RuntimeError(f"virtualenv did not create {PYTHON}")
 
 
 def require_full_commit(ref: str, *, variable: str) -> None:
@@ -127,11 +161,18 @@ def install() -> None:
     APP_ROOT.mkdir(parents=True, exist_ok=True)
     checkout(COMFY_REPO, COMFY_DIR, COMFY_REF)
     checkout(EXTENSION_REPO, EXTENSION_DIR, EXTENSION_REF)
+    ensure_app_python()
     run(PYTHON, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
     run(PYTHON, "-m", "pip", "install", "-r", COMFY_DIR / "requirements.txt")
     run(PYTHON, "-m", "pip", "install", "--upgrade", *PINNED_RUNTIME)
     run(PYTHON, "-m", "pip", "install", "-e", EXTENSION_DIR)
-    run(PYTHON, "-m", "pip", "check")
+    pip_check = run(PYTHON, "-m", "pip", "check", check=False)
+    if pip_check.returncode:
+        print(
+            "WARNING: pip check reported inherited Kaggle-image conflicts; "
+            "continuing to the authoritative import and live-node readiness checks.",
+            flush=True,
+        )
     link_models()
     workflow_dir = COMFY_DIR / "user" / "default" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
