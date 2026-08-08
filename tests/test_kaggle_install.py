@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import hashlib
@@ -22,25 +20,57 @@ def load_script():
     return module
 
 
-def test_kaggle_installer_downloads_missing_model_from_owned_dataset(monkeypatch, tmp_path: Path) -> None:
+def test_kaggle_installer_requires_attached_model_input(monkeypatch, tmp_path: Path) -> None:
     module = load_script()
+    monkeypatch.setattr(module, "REQUIRED_MODELS", {"models": ("model.safetensors",)})
     input_root = tmp_path / "input"
     input_root.mkdir()
-    downloaded = tmp_path / "cache" / "model.safetensors"
-    downloaded.parent.mkdir()
-    downloaded.write_bytes(b"weights")
-    calls: list[tuple[str, str]] = []
 
-    def dataset_download(dataset: str, *, path: str) -> str:
-        calls.append((dataset, path))
-        return str(downloaded)
+    with pytest.raises(FileNotFoundError, match="Missing attached Kaggle model inputs: model.safetensors"):
+        module.find_models(input_root=input_root)
 
-    monkeypatch.setitem(sys.modules, "kagglehub", SimpleNamespace(dataset_download=dataset_download))
-    monkeypatch.delenv("KAGGLEHUB_CACHE", raising=False)
 
-    assert module.find_model("model.safetensors", input_root=input_root) == downloaded
-    assert calls == [(module.MODEL_DATASET, "model.safetensors")]
-    assert os.environ["KAGGLEHUB_CACHE"] == str(module.MODEL_CACHE)
+def test_kaggle_installer_resolves_each_required_model_once(tmp_path: Path) -> None:
+    module = load_script()
+    expected = {filename for names in module.REQUIRED_MODELS.values() for filename in names}
+    for filename in expected:
+        path = tmp_path / "weights" / filename
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"weights")
+
+    assert set(module.find_models(input_root=tmp_path)) == expected
+
+
+def test_kaggle_installer_rejects_ambiguous_model_inputs(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    monkeypatch.setattr(module, "REQUIRED_MODELS", {"models": ("model.safetensors",)})
+    for dataset in ("first", "second"):
+        path = tmp_path / dataset / "model.safetensors"
+        path.parent.mkdir()
+        path.write_bytes(b"weights")
+
+    with pytest.raises(RuntimeError, match="Multiple attached Kaggle inputs provide model.safetensors"):
+        module.find_models(input_root=tmp_path)
+
+
+def test_kaggle_installer_preflights_models_before_reset(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    marker = app_root / "keep"
+    marker.write_text("present")
+    monkeypatch.setattr(module, "APP_ROOT", app_root)
+    monkeypatch.setattr(module, "RESET_INSTALL", True)
+    monkeypatch.setattr(module, "require_two_t4s", lambda: None)
+
+    def missing_models() -> None:
+        raise FileNotFoundError("missing models")
+
+    monkeypatch.setattr(module, "find_models", missing_models, raising=False)
+
+    with pytest.raises(FileNotFoundError, match="missing models"):
+        module.install()
+    assert marker.is_file()
 
 
 def test_kaggle_installer_requires_exactly_two_t4s(monkeypatch) -> None:

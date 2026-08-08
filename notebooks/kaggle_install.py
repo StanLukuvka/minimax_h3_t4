@@ -1,14 +1,12 @@
 """Kaggle entry script for the standalone MiniMax H3 two-T4 ComfyUI extension.
 
-Run this file in a Kaggle GPU notebook with exactly two Tesla T4 GPUs. The
-four required model files are used from attached inputs when available and
-otherwise fetched from the configured Kaggle dataset.
+Run this file in a Kaggle GPU notebook with exactly two Tesla T4 GPUs and the
+four required model files attached as Kaggle input datasets.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import os
 from pathlib import Path
@@ -41,8 +39,6 @@ EXTENSION_REF = os.environ.get(
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
 ENABLE_CLOUDFLARE = os.environ.get("H3_T4_ENABLE_CLOUDFLARE", "0") == "1"
-MODEL_DATASET = os.environ.get("H3_T4_MODEL_DATASET", "stanlukuvka/minimax-h3-comfyui-weights")
-MODEL_CACHE = Path(os.environ.get("H3_T4_MODEL_CACHE", "/kaggle/temp/kagglehub"))
 CLOUDFLARED = APP_ROOT / "cloudflared"
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64"
 CLOUDFLARED_SHA256 = "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17"
@@ -57,8 +53,8 @@ PINNED_RUNTIME = (
     "safetensors==0.8.0",
 )
 REQUIRED_MODELS = {
-    "diffusion_models": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-    "text_encoders": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "diffusion_models": ("minimax_h3_fl2va_pruned_int8_convrot.safetensors",),
+    "text_encoders": ("qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",),
     "vae": (
         "minimax_h3_video_vae_fp16.safetensors",
         "minimax_h3_audio_vae_fp32.safetensors",
@@ -66,10 +62,15 @@ REQUIRED_MODELS = {
 }
 
 
-def run(*args: object, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+def run(
+    *args: object,
+    cwd: Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     command = [str(arg) for arg in args]
     print("+", " ".join(command), flush=True)
-    return subprocess.run(command, cwd=cwd, check=check)
+    return subprocess.run(command, cwd=cwd, check=check, env=env)
 
 
 def ensure_app_python() -> None:
@@ -89,15 +90,14 @@ def ensure_app_python() -> None:
     )
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(BOOTSTRAP_DIR)
-    command = [
+    run(
         sys.executable,
         "-m",
         "virtualenv",
         "--system-site-packages",
-        str(VENV_DIR),
-    ]
-    print("+", " ".join(command), flush=True)
-    subprocess.run(command, check=True, env=environment)
+        VENV_DIR,
+        env=environment,
+    )
     if not PYTHON.exists():
         raise RuntimeError(f"virtualenv did not create {PYTHON}")
 
@@ -132,35 +132,27 @@ def require_two_t4s() -> None:
     print("GPU topology:", names)
 
 
-def find_model(filename: str, *, input_root: Path = Path("/kaggle/input")) -> Path:
-    matches = sorted(input_root.rglob(filename))
-    if matches:
-        return matches[0]
-
-    os.environ.setdefault("KAGGLEHUB_CACHE", str(MODEL_CACHE))
-    try:
-        kagglehub = importlib.import_module("kagglehub")
-    except ImportError as exc:
-        raise FileNotFoundError(f"Attach {MODEL_DATASET} or install kagglehub to fetch {filename}") from exc
-
-    print(f"Downloading missing model from {MODEL_DATASET}: {filename}", flush=True)
-    downloaded = Path(kagglehub.dataset_download(MODEL_DATASET, path=filename))
-    if downloaded.is_file() and downloaded.name == filename:
-        return downloaded
-    matches = sorted(downloaded.rglob(filename)) if downloaded.is_dir() else []
-    if not matches:
-        raise FileNotFoundError(f"{MODEL_DATASET} did not provide the required exact filename {filename}")
-    return matches[0]
+def find_models(*, input_root: Path = Path("/kaggle/input")) -> dict[str, Path]:
+    required = {filename for names in REQUIRED_MODELS.values() for filename in names}
+    matches: dict[str, Path] = {}
+    for path in input_root.rglob("*"):
+        if path.name not in required or not path.is_file():
+            continue
+        if path.name in matches:
+            raise RuntimeError(f"Multiple attached Kaggle inputs provide {path.name}")
+        matches[path.name] = path
+    missing = sorted(required.difference(matches))
+    if missing:
+        raise FileNotFoundError(f"Missing attached Kaggle model inputs: {', '.join(missing)}")
+    return matches
 
 
-def link_models() -> None:
+def link_models(sources: dict[str, Path]) -> None:
     for folder, names in REQUIRED_MODELS.items():
-        if isinstance(names, str):
-            names = (names,)
         target_dir = COMFY_DIR / "models" / folder
         target_dir.mkdir(parents=True, exist_ok=True)
         for filename in names:
-            source = find_model(filename)
+            source = sources[filename]
             target = target_dir / filename
             if target.is_symlink() or target.exists():
                 target.unlink()
@@ -174,6 +166,7 @@ def install() -> None:
     require_full_commit(COMFY_REF, variable="COMFY_COMMIT")
     require_full_commit(EXTENSION_REF, variable="H3_T4_EXTENSION_REF")
     require_two_t4s()
+    model_sources = find_models()
     if RESET_INSTALL and APP_ROOT.exists():
         shutil.rmtree(APP_ROOT)
     APP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -191,7 +184,7 @@ def install() -> None:
             "continuing to the authoritative import and live-node readiness checks.",
             flush=True,
         )
-    link_models()
+    link_models(model_sources)
     workflow_dir = COMFY_DIR / "user" / "default" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
     for workflow in (EXTENSION_DIR / "workflows").glob("*.json"):
