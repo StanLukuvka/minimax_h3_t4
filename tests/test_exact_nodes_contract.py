@@ -137,6 +137,60 @@ def test_initializer_releases_conditioning_before_ray_init(monkeypatch) -> None:
     assert fake_ray.init_kwargs["runtime_env"] is runtime_env
 
 
+def test_initializer_interrupt_force_cleans_partial_actor_creation() -> None:
+    events: list[object] = []
+    fake_ray = FakeRay()
+    checks = 0
+
+    class Interrupted(RuntimeError):
+        pass
+
+    def check_interrupt() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise Interrupted("cancelled during actor creation")
+
+    initializer = H3T4Initializer(
+        ray_module=fake_ray,
+        worker_factory=lambda rank, _config: (events.append(("created", rank)), FakeWorker(rank, events))[1],
+        runtime_env_builder=lambda: {},
+    )
+
+    with pytest.raises(Interrupted, match="cancelled during actor creation"):
+        initializer.initialize(
+            load_after=object(),
+            manage_parent_memory=False,
+            interrupt_checker=check_interrupt,
+            force_on_failure=True,
+        )
+
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "created"] == [("created", 0)]
+    assert fake_ray.shutdown_calls == 2
+
+
+def test_initializer_cleans_partial_ray_startup_failure() -> None:
+    class PartialInitRay(FakeRay):
+        def init(self, **kwargs):
+            self.init_kwargs = kwargs
+            raise RuntimeError("partial ray startup failed")
+
+    fake_ray = PartialInitRay()
+    initializer = H3T4Initializer(
+        ray_module=fake_ray,
+        runtime_env_builder=lambda: {},
+    )
+
+    with pytest.raises(RuntimeError, match="partial ray startup failed"):
+        initializer.initialize(
+            load_after=object(),
+            manage_parent_memory=False,
+            force_on_failure=True,
+        )
+
+    assert fake_ray.shutdown_calls == 2
+
+
 def test_int8_unet_load_is_strictly_sequential_after_conditioning_release() -> None:
     events: list[object] = []
     group = _group(events)
@@ -165,6 +219,36 @@ def test_unet_loader_requires_conditioning_dependency() -> None:
         H3T4UNETLoader(path_resolver=lambda name: name).load(_group([]), "h3.safetensors", load_after=None)
 
 
+def test_unet_loader_interrupt_force_cleans_partial_rank_load() -> None:
+    events: list[object] = []
+    group = _group(events)
+    checks = 0
+
+    class Interrupted(RuntimeError):
+        pass
+
+    def check_interrupt() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise Interrupted("cancelled while loading")
+
+    loader = H3T4UNETLoader(path_resolver=lambda name: f"/models/{name}")
+
+    with pytest.raises(Interrupted, match="cancelled while loading"):
+        loader.load(
+            group,
+            "h3.safetensors",
+            load_after=object(),
+            manage_parent_memory=False,
+            interrupt_checker=check_interrupt,
+            force_on_failure=True,
+        )
+
+    assert group.alive is False
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "load"] == [("load", 0, "/models/h3.safetensors", "int8")]
+
+
 def test_scheduler_and_basic_guider_keep_stock_comfy_contracts() -> None:
     events: list[object] = []
     group = _group(events)
@@ -173,6 +257,29 @@ def test_scheduler_and_basic_guider_keep_stock_comfy_contracts() -> None:
     conditioning = [["text", {"pooled_output": "pooled"}]]
     guider = H3T4BasicGuider().get_guider(group, conditioning)[0]
     assert guider == {"group": group, "type": "basic", "positive": conditioning}
+
+
+def test_scheduler_polls_parent_interrupt_checker() -> None:
+    group = _group([])
+    checks = 0
+
+    class Interrupted(RuntimeError):
+        pass
+
+    def check_interrupt() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise Interrupted("cancelled during scheduling")
+
+    with pytest.raises(Interrupted, match="cancelled during scheduling"):
+        H3T4BasicScheduler().get_sigmas(
+            group,
+            "simple",
+            20,
+            1.0,
+            interrupt_checker=check_interrupt,
+        )
 
 
 def test_advanced_sampler_preserves_av_and_shuts_down_workers() -> None:
@@ -198,6 +305,36 @@ def test_advanced_sampler_preserves_av_and_shuts_down_workers() -> None:
     ]
     assert group.alive is False
     assert ray.shutdown_calls == 1
+
+
+def test_advanced_sampler_polls_parent_interrupt_checker() -> None:
+    events: list[object] = []
+    group = _group(events)
+    guider = H3T4BasicGuider().get_guider(group, "conditioning")[0]
+    checks = 0
+
+    class Interrupted(RuntimeError):
+        pass
+
+    def check_interrupt() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise Interrupted("cancelled")
+
+    with pytest.raises(Interrupted, match="cancelled"):
+        H3T4SamplerAdvanced().sample(
+            True,
+            "noise",
+            guider,
+            "sampler",
+            [1.0, 0.0],
+            {"samples": ["video", "audio"]},
+            close_group=False,
+            interrupt_checker=check_interrupt,
+        )
+
+    assert group.alive is True
 
 
 def test_advanced_sampler_shuts_down_after_worker_failure() -> None:

@@ -26,8 +26,8 @@ The initial release intentionally excludes EasyCache, TeaCache, combined cache m
 
 The extension registers exactly two nodes:
 
-- **MiniMax H3 T4 Loader** — releases parent ComfyUI model memory, starts the fixed two-worker runtime, sequentially maps the INT8 checkpoint onto rank 0 then rank 1, and applies either the Exact or frozen Spectrum profile.
-- **MiniMax H3 T4 Sampler** — owns noise, sampler selection, scheduling, guidance, distributed execution, and bounded confirmed worker teardown before returning ordinary video/audio latents.
+- **MiniMax H3 T4 Loader** — returns an inert checkpoint/acceleration descriptor. It creates no Ray actors and loads no weights, so cancellation between graph nodes cannot strand worker processes.
+- **MiniMax H3 T4 Sampler** — checks interruption, releases parent ComfyUI model memory, starts and sequentially loads the fixed two-worker runtime, then owns noise, sampler selection, scheduling, guidance, distributed execution, and confirmed worker teardown before returning ordinary video/audio latents.
 
 Ray, NCCL, FSDP, Ulysses, GPU assignment, object-store sizing, and Spectrum tuning are implementation details rather than workflow settings. Stock ComfyUI remains responsible for CLIP loading, `MiniMaxH3ImageToVideo`, parent-process VAE loading and decoding, and video output.
 

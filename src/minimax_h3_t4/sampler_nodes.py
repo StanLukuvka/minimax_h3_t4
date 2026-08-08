@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .runtime.lifecycle import H3T4ActorGroup, remote, resolve
+from .runtime.lifecycle import H3T4ActorGroup, remote, resolve, resolve_interruptibly
 
 
 class H3T4BasicScheduler:
@@ -35,9 +35,15 @@ class H3T4BasicScheduler:
         scheduler: str,
         steps: int,
         denoise: float,
+        *,
+        interrupt_checker: Any | None = None,
     ) -> tuple[Any]:
         model.require_alive()
-        result = resolve(model.ray_module, remote(model.workers[0], "get_sigmas", scheduler, steps, denoise))
+        ref = remote(model.workers[0], "get_sigmas", scheduler, steps, denoise)
+        if interrupt_checker is None:
+            result = resolve(model.ray_module, ref)
+        else:
+            result = resolve_interruptibly(model.ray_module, [ref], interrupt_checker)[0]
         return (result,)
 
 
@@ -87,6 +93,9 @@ class H3T4SamplerAdvanced:
         sampler: Any,
         sigmas: Any,
         latent_image: dict[str, Any],
+        *,
+        close_group: bool = True,
+        interrupt_checker: Any | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if not isinstance(guider, dict) or guider.get("type") != "basic":
             raise ValueError("H3T4SamplerAdvanced requires H3T4BasicGuider")
@@ -111,7 +120,10 @@ class H3T4SamplerAdvanced:
                         latent_image,
                     )
                 )
-            results = resolve(group.ray_module, refs)
+            if interrupt_checker is None:
+                results = resolve(group.ray_module, refs)
+            else:
+                results = resolve_interruptibly(group.ray_module, refs, interrupt_checker)
             if not isinstance(results, list):
                 results = [results]
             result = next((item for item in results if item is not None), None)
@@ -125,14 +137,15 @@ class H3T4SamplerAdvanced:
             primary_error = exc
             raise
         finally:
-            try:
-                group.close(timeout_seconds=30.0)
-            except BaseException as close_exc:
-                if primary_error is None:
-                    raise
-                add_note = getattr(primary_error, "add_note", None)
-                if callable(add_note):
-                    add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
+            if close_group:
+                try:
+                    group.close(timeout_seconds=30.0)
+                except BaseException as close_exc:
+                    if primary_error is None:
+                        raise
+                    add_note = getattr(primary_error, "add_note", None)
+                    if callable(add_note):
+                        add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
 
     @staticmethod
     def _validate_av_latent(latent: Any) -> None:

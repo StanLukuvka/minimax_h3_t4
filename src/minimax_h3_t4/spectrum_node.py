@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from .runtime.lifecycle import H3T4ActorGroup, remote, resolve
+from .runtime.lifecycle import H3T4ActorGroup, remote, resolve, resolve_interruptibly
 from .spectrum.config import SpectrumConfig
 
 
@@ -48,6 +48,8 @@ class H3T4Spectrum:
         tail_actual_steps: int,
         max_history: int,
         debug: bool,
+        *,
+        interrupt_checker: Any | None = None,
     ) -> tuple[H3T4ActorGroup]:
         model.require_alive()
         if not enabled:
@@ -66,5 +68,8 @@ class H3T4Spectrum:
             debug=debug,
         ).validate()
         refs = [remote(worker, "configure_spectrum", asdict(config)) for worker in model.workers]
-        resolve(model.ray_module, refs)
+        if interrupt_checker is None:
+            resolve(model.ray_module, refs)
+        else:
+            resolve_interruptibly(model.ray_module, refs, interrupt_checker)
         return (model,)

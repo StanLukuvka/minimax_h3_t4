@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .runtime.lifecycle import H3T4ActorGroup, remote, resolve
+from .runtime.lifecycle import H3T4ActorGroup, remote, resolve, resolve_interruptibly
 from .runtime.topology import ExactH3T4Topology
 
 
@@ -63,13 +63,6 @@ def _release_conditioning(model_management: Any) -> None:
     model_management.unload_all_models()
     model_management.soft_empty_cache()
     gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
 
 
 class H3T4Initializer:
@@ -121,6 +114,10 @@ class H3T4Initializer:
         GPU_SELECT: str = "0,1",
         ray_object_store_gb: float = 0.5,
         load_after: Any | None = None,
+        *,
+        manage_parent_memory: bool = True,
+        interrupt_checker: Any | None = None,
+        force_on_failure: bool = False,
     ) -> tuple[H3T4ActorGroup]:
         if not 0.1 <= float(ray_object_store_gb) <= 1.0:
             raise ValueError("ray_object_store_gb must be between 0.1 and 1.0 GiB")
@@ -129,28 +126,32 @@ class H3T4Initializer:
             raise ValueError("The exact MiniMax-H3 T4 runtime requires GPU_SELECT='0,1'")
         ray_module = self._ray or _ray_module()
         self._ray = ray_module
-        model_management = self._model_management or _model_management()
         if load_after is None:
             raise ValueError("MiniMax-H3 initialization requires conditioning connected to load_after")
         load_after = None
-        _release_conditioning(model_management)
+        if manage_parent_memory:
+            _release_conditioning(self._model_management or _model_management())
         ray_module.shutdown()
-        ray_module.init(
-            address="local",
-            namespace=ray_cluster_namespace,
-            object_store_memory=int(float(ray_object_store_gb) * 1024**3),
-            include_dashboard=False,
-            runtime_env=self._runtime_env_builder(),
-        )
         topology = ExactH3T4Topology()
         config = topology.as_worker_config()
         workers: list[Any] = []
         try:
+            ray_module.init(
+                address="local",
+                namespace=ray_cluster_namespace,
+                object_store_memory=int(float(ray_object_store_gb) * 1024**3),
+                include_dashboard=False,
+                runtime_env=self._runtime_env_builder(),
+            )
             for rank in range(topology.world_size):
+                if interrupt_checker is not None:
+                    interrupt_checker()
                 workers.append(self._create_worker(rank, config))
+            if interrupt_checker is not None:
+                interrupt_checker()
         except BaseException as exc:
             try:
-                H3T4ActorGroup(workers, ray_module, topology).close()
+                H3T4ActorGroup(workers, ray_module, topology).close(force=force_on_failure)
             except BaseException as close_exc:
                 add_note = getattr(exc, "add_note", None)
                 if callable(add_note):
@@ -197,19 +198,28 @@ class H3T4UNETLoader:
         actor_group: H3T4ActorGroup,
         unet_name: str,
         load_after: Any | None,
+        *,
+        manage_parent_memory: bool = True,
+        interrupt_checker: Any | None = None,
+        force_on_failure: bool = False,
     ) -> tuple[H3T4ActorGroup]:
         actor_group.require_alive()
         if load_after is None:
             raise ValueError("MiniMax-H3 INT8 loading requires conditioning connected to load_after")
         load_after = None
-        _release_conditioning(self._model_management or _model_management())
+        if manage_parent_memory:
+            _release_conditioning(self._model_management or _model_management())
         path = self._path_resolver(unet_name)
         try:
             for worker in actor_group.workers:
-                resolve(actor_group.ray_module, remote(worker, "load_unet", path, "int8"))
+                ref = remote(worker, "load_unet", path, "int8")
+                if interrupt_checker is None:
+                    resolve(actor_group.ray_module, ref)
+                else:
+                    resolve_interruptibly(actor_group.ray_module, [ref], interrupt_checker)
         except BaseException as exc:
             try:
-                actor_group.close()
+                actor_group.close(force=force_on_failure)
             except BaseException as close_exc:
                 add_note = getattr(exc, "add_note", None)
                 if callable(add_note):

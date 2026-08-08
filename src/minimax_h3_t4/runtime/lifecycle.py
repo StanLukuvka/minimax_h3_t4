@@ -24,6 +24,37 @@ def resolve(ray_module: Any, value: Any) -> Any:
     return getter(value) if getter is not None else value
 
 
+def resolve_interruptibly(
+    ray_module: Any,
+    refs: list[Any],
+    interrupt_checker: Any,
+    *,
+    poll_seconds: float = 0.25,
+) -> list[Any]:
+    """Resolve actor refs while giving Comfy's parent interrupt flag a bounded poll point."""
+    waiter = getattr(ray_module, "wait", None)
+    if waiter is None:
+        interrupt_checker()
+        result = resolve(ray_module, refs)
+        interrupt_checker()
+        return result if isinstance(result, list) else [result]
+
+    pending = list(refs)
+    results: list[Any] = [None] * len(refs)
+    while pending:
+        interrupt_checker()
+        ready, pending = waiter(
+            pending,
+            num_returns=1,
+            timeout=poll_seconds,
+        )
+        for ref in ready:
+            index = next(index for index, original in enumerate(refs) if results[index] is None and (ref is original or ref == original))
+            results[index] = resolve(ray_module, ref)
+    interrupt_checker()
+    return results
+
+
 def _actor_error_type(ray_module: Any) -> type[BaseException] | tuple[()]:
     error = getattr(getattr(ray_module, "exceptions", None), "RayActorError", None)
     return error if isinstance(error, type) and issubclass(error, BaseException) else ()
@@ -112,7 +143,7 @@ class H3T4ActorGroup:
         if not self.alive:
             raise RuntimeError("MiniMax-H3 two-T4 actor group is closed")
 
-    def close(self, timeout_seconds: float = 30.0) -> None:
+    def close(self, timeout_seconds: float = 30.0, *, force: bool = False) -> None:
         if not self.alive:
             return
         if timeout_seconds <= 0:
@@ -120,38 +151,44 @@ class H3T4ActorGroup:
         deadline = time.monotonic() + timeout_seconds
         actor_error = _actor_error_type(self.ray_module)
         graceful_failure: BaseException | None = None
-        refs: list[Any] = []
-        for worker in self.workers:
-            try:
-                refs.append(remote(worker, "shutdown"))
-            except BaseException as exc:
-                graceful_failure = graceful_failure or exc
-        if refs:
-            try:
-                ready, pending = self.ray_module.wait(
-                    refs,
-                    num_returns=len(refs),
-                    timeout=max(0.0, deadline - time.monotonic()),
-                )
-                if pending:
-                    graceful_failure = graceful_failure or TimeoutError(f"{len(pending)} worker shutdown RPCs exceeded the deadline")
-                for ref in ready:
-                    try:
-                        self.ray_module.get(ref)
-                    except actor_error:
-                        continue
-                    except BaseException as exc:
-                        graceful_failure = graceful_failure or exc
-                    else:
-                        graceful_failure = graceful_failure or RuntimeError("worker shutdown returned without terminating its actor")
-            except BaseException as exc:
-                graceful_failure = graceful_failure or exc
-
-        if graceful_failure is not None:
+        if force:
             try:
                 _force_kill(self.ray_module, self.workers, deadline)
             except BaseException as exc:
-                graceful_failure = graceful_failure or exc
+                graceful_failure = exc
+        else:
+            refs: list[Any] = []
+            for worker in self.workers:
+                try:
+                    refs.append(remote(worker, "shutdown"))
+                except BaseException as exc:
+                    graceful_failure = graceful_failure or exc
+            if refs:
+                try:
+                    ready, pending = self.ray_module.wait(
+                        refs,
+                        num_returns=len(refs),
+                        timeout=max(0.0, deadline - time.monotonic()),
+                    )
+                    if pending:
+                        graceful_failure = graceful_failure or TimeoutError(f"{len(pending)} worker shutdown RPCs exceeded the deadline")
+                    for ref in ready:
+                        try:
+                            self.ray_module.get(ref)
+                        except actor_error:
+                            continue
+                        except BaseException as exc:
+                            graceful_failure = graceful_failure or exc
+                        else:
+                            graceful_failure = graceful_failure or RuntimeError("worker shutdown returned without terminating its actor")
+                except BaseException as exc:
+                    graceful_failure = graceful_failure or exc
+
+            if graceful_failure is not None:
+                try:
+                    _force_kill(self.ray_module, self.workers, deadline)
+                except BaseException as exc:
+                    graceful_failure = graceful_failure or exc
 
         unconfirmed = _confirm_dead(self.ray_module, self.workers, deadline)
         if unconfirmed:
