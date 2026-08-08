@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import hashlib
@@ -18,6 +20,27 @@ def load_script():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_kaggle_installer_downloads_missing_model_from_owned_dataset(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    downloaded = tmp_path / "cache" / "model.safetensors"
+    downloaded.parent.mkdir()
+    downloaded.write_bytes(b"weights")
+    calls: list[tuple[str, str]] = []
+
+    def dataset_download(dataset: str, *, path: str) -> str:
+        calls.append((dataset, path))
+        return str(downloaded)
+
+    monkeypatch.setitem(sys.modules, "kagglehub", SimpleNamespace(dataset_download=dataset_download))
+    monkeypatch.delenv("KAGGLEHUB_CACHE", raising=False)
+
+    assert module.find_model("model.safetensors", input_root=input_root) == downloaded
+    assert calls == [(module.MODEL_DATASET, "model.safetensors")]
+    assert os.environ["KAGGLEHUB_CACHE"] == str(module.MODEL_CACHE)
 
 
 def test_kaggle_installer_requires_exactly_two_t4s(monkeypatch) -> None:

@@ -1,12 +1,14 @@
 """Kaggle entry script for the standalone MiniMax H3 two-T4 ComfyUI extension.
 
-Run this file in a Kaggle GPU notebook with exactly two Tesla T4 GPUs and the
-four required model files attached as Kaggle input datasets.
+Run this file in a Kaggle GPU notebook with exactly two Tesla T4 GPUs. The
+four required model files are used from attached inputs when available and
+otherwise fetched from the configured Kaggle dataset.
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -39,6 +41,8 @@ EXTENSION_REF = os.environ.get(
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
 ENABLE_CLOUDFLARE = os.environ.get("H3_T4_ENABLE_CLOUDFLARE", "0") == "1"
+MODEL_DATASET = os.environ.get("H3_T4_MODEL_DATASET", "stanlukuvka/minimax-h3-comfyui-weights")
+MODEL_CACHE = Path(os.environ.get("H3_T4_MODEL_CACHE", "/kaggle/temp/kagglehub"))
 CLOUDFLARED = APP_ROOT / "cloudflared"
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64"
 CLOUDFLARED_SHA256 = "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17"
@@ -128,10 +132,24 @@ def require_two_t4s() -> None:
     print("GPU topology:", names)
 
 
-def find_model(filename: str) -> Path:
-    matches = sorted(Path("/kaggle/input").rglob(filename))
+def find_model(filename: str, *, input_root: Path = Path("/kaggle/input")) -> Path:
+    matches = sorted(input_root.rglob(filename))
+    if matches:
+        return matches[0]
+
+    os.environ.setdefault("KAGGLEHUB_CACHE", str(MODEL_CACHE))
+    try:
+        kagglehub = importlib.import_module("kagglehub")
+    except ImportError as exc:
+        raise FileNotFoundError(f"Attach {MODEL_DATASET} or install kagglehub to fetch {filename}") from exc
+
+    print(f"Downloading missing model from {MODEL_DATASET}: {filename}", flush=True)
+    downloaded = Path(kagglehub.dataset_download(MODEL_DATASET, path=filename))
+    if downloaded.is_file() and downloaded.name == filename:
+        return downloaded
+    matches = sorted(downloaded.rglob(filename)) if downloaded.is_dir() else []
     if not matches:
-        raise FileNotFoundError(f"Attach a Kaggle dataset containing {filename}")
+        raise FileNotFoundError(f"{MODEL_DATASET} did not provide the required exact filename {filename}")
     return matches[0]
 
 
