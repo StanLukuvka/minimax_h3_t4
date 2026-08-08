@@ -25,8 +25,14 @@ VENV_DIR = APP_ROOT / "venv"
 PYTHON = VENV_DIR / "bin" / "python"
 COMFY_REPO = os.environ.get("COMFY_REPO_URL", "https://github.com/Comfy-Org/ComfyUI.git")
 COMFY_REF = os.environ.get("COMFY_COMMIT", "9a9fdb10ed144ce760d9682cb247526ea23cc525")
-EXTENSION_REPO = os.environ.get("H3_T4_EXTENSION_REPO_URL", "")
-EXTENSION_REF = os.environ.get("H3_T4_EXTENSION_REF", "")
+EXTENSION_REPO = os.environ.get(
+    "H3_T4_EXTENSION_REPO_URL",
+    "https://github.com/StanLukuvka/minimax_h3_t4.git",
+)
+EXTENSION_REF = os.environ.get(
+    "H3_T4_EXTENSION_REF",
+    "7e9e992b9d40a7b7852a6196579c5330908a474d",
+)
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
 ENABLE_CLOUDFLARE = os.environ.get("H3_T4_ENABLE_CLOUDFLARE", "0") == "1"

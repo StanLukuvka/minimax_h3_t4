@@ -46,6 +46,22 @@ def test_kaggle_installer_requires_immutable_extension_commit() -> None:
     module.require_full_commit("a" * 40, variable="H3_T4_EXTENSION_REF")
 
 
+def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypatch) -> None:
+    monkeypatch.delenv("H3_T4_EXTENSION_REPO_URL", raising=False)
+    monkeypatch.delenv("H3_T4_EXTENSION_REF", raising=False)
+    module = load_script()
+    assert module.EXTENSION_REPO == "https://github.com/StanLukuvka/minimax_h3_t4.git"
+    assert module.EXTENSION_REF == "7e9e992b9d40a7b7852a6196579c5330908a474d"
+
+
+def test_kaggle_installer_allows_explicit_immutable_extension_override(monkeypatch) -> None:
+    monkeypatch.setenv("H3_T4_EXTENSION_REPO_URL", "https://example.invalid/override.git")
+    monkeypatch.setenv("H3_T4_EXTENSION_REF", "a" * 40)
+    module = load_script()
+    assert module.EXTENSION_REPO == "https://example.invalid/override.git"
+    assert module.EXTENSION_REF == "a" * 40
+
+
 def test_kaggle_runtime_dependencies_are_exactly_pinned() -> None:
     module = load_script()
     assert "ray==2.56.1" in module.PINNED_RUNTIME
@@ -80,6 +96,12 @@ def test_kaggle_notebook_executes_the_versioned_installer() -> None:
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
     packaged = SCRIPT.parents[1] / "src" / "minimax_h3_t4" / "notebooks" / "kaggle_install.py"
     assert packaged.read_bytes() == SCRIPT.read_bytes()
+
+
+def test_packaged_kaggle_notebook_matches_git_clone_entry() -> None:
+    notebook = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
+    packaged = SCRIPT.parents[1] / "src" / "minimax_h3_t4" / "notebooks" / notebook.name
+    assert packaged.read_bytes() == notebook.read_bytes()
 
 
 def test_kaggle_installer_has_no_donor_plugin_installation() -> None:
