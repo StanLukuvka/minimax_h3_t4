@@ -107,13 +107,33 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     assert module.EXTENSION_REF == "7e9e992b9d40a7b7852a6196579c5330908a474d"
 
 
-def test_kaggle_installer_bootstraps_virtualenv_without_stdlib_ensurepip(monkeypatch) -> None:
-    monkeypatch.delenv("H3_T4_PYTHON", raising=False)
+def test_kaggle_installer_bootstraps_dedicated_app_python(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("H3_T4_PYTHON", str(tmp_path / "kernel-python"))
     module = load_script()
     assert module.PYTHON == module.VENV_DIR / "bin" / "python"
-    source = SCRIPT.read_text()
-    assert '"virtualenv"' in source
-    assert '"-m", "venv"' not in source
+    venv_dir = tmp_path / "venv"
+    bootstrap_dir = tmp_path / "bootstrap"
+    python = venv_dir / "bin" / "python"
+    monkeypatch.setattr(module, "VENV_DIR", venv_dir)
+    monkeypatch.setattr(module, "BOOTSTRAP_DIR", bootstrap_dir)
+    monkeypatch.setattr(module, "PYTHON", python)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def record_run(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+        if "virtualenv" in args:
+            python.parent.mkdir(parents=True)
+            python.touch()
+
+    monkeypatch.setattr(module, "run", record_run)
+    module.ensure_app_python()
+
+    assert module.PYTHON == module.VENV_DIR / "bin" / "python"
+    assert calls[0][0][-3:] == ("--target", bootstrap_dir, module.VIRTUALENV_PIN)
+    assert calls[1][0][-3:] == ("virtualenv", "--system-site-packages", venv_dir)
+    environment = calls[1][1]["env"]
+    assert isinstance(environment, dict)
+    assert environment["PYTHONPATH"] == str(bootstrap_dir)
 
 
 def test_kaggle_installer_preserves_extension_environment_overrides(monkeypatch) -> None:

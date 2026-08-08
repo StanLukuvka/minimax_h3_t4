@@ -23,8 +23,7 @@ COMFY_DIR = APP_ROOT / "ComfyUI"
 EXTENSION_DIR = COMFY_DIR / "custom_nodes" / "minimax_h3_t4"
 VENV_DIR = APP_ROOT / "venv"
 BOOTSTRAP_DIR = APP_ROOT / "bootstrap"
-PYTHON_OVERRIDE = os.environ.get("H3_T4_PYTHON")
-PYTHON = Path(PYTHON_OVERRIDE) if PYTHON_OVERRIDE else VENV_DIR / "bin" / "python"
+PYTHON = VENV_DIR / "bin" / "python"
 VIRTUALENV_PIN = "virtualenv==20.34.0"
 COMFY_REPO = os.environ.get("COMFY_REPO_URL", "https://github.com/Comfy-Org/ComfyUI.git")
 COMFY_REF = os.environ.get("COMFY_COMMIT", "9a9fdb10ed144ce760d9682cb247526ea23cc525")
@@ -65,19 +64,16 @@ REQUIRED_MODELS = {
 def run(
     *args: object,
     cwd: Path | None = None,
-    check: bool = True,
     env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[bytes]:
+) -> None:
     command = [str(arg) for arg in args]
     print("+", " ".join(command), flush=True)
-    return subprocess.run(command, cwd=cwd, check=check, env=env)
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def ensure_app_python() -> None:
     if PYTHON.exists():
         return
-    if PYTHON_OVERRIDE:
-        raise FileNotFoundError(f"H3_T4_PYTHON does not exist: {PYTHON}")
     BOOTSTRAP_DIR.mkdir(parents=True, exist_ok=True)
     run(
         sys.executable,
@@ -177,13 +173,6 @@ def install() -> None:
     run(PYTHON, "-m", "pip", "install", "-r", COMFY_DIR / "requirements.txt")
     run(PYTHON, "-m", "pip", "install", "--upgrade", *PINNED_RUNTIME)
     run(PYTHON, "-m", "pip", "install", "-e", EXTENSION_DIR)
-    pip_check = run(PYTHON, "-m", "pip", "check", check=False)
-    if pip_check.returncode:
-        print(
-            "WARNING: pip check reported inherited Kaggle-image conflicts; "
-            "continuing to the authoritative import and live-node readiness checks.",
-            flush=True,
-        )
     link_models(model_sources)
     workflow_dir = COMFY_DIR / "user" / "default" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
