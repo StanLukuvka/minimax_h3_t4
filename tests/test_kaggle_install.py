@@ -152,7 +152,12 @@ def test_kaggle_runtime_dependencies_are_exactly_pinned() -> None:
 
 def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) -> None:
     module = load_script()
-    payload = b"pinned cloudflared test binary"
+    payload = b"\x7fELFpinned cloudflared test binary"
+    source_dir = tmp_path / "input" / "cloudflare-files"
+    source_dir.mkdir(parents=True)
+    (source_dir / "config.yml").write_text("tunnel: test\n")
+    work_dir = tmp_path / "working" / "cloudflare"
+    config_file = work_dir / "config.yml"
     target = tmp_path / "cloudflared"
     monkeypatch.setattr(module, "CLOUDFLARED", target)
     monkeypatch.setattr(module, "CLOUDFLARED_SHA256", hashlib.sha256(payload).hexdigest())
@@ -162,8 +167,62 @@ def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) ->
         lambda *_args, **_kwargs: SimpleNamespace(read=lambda: payload),
     )
 
-    assert module.ensure_cloudflared() == target
+    assert module.ensure_cloudflared(
+        source_dir=source_dir,
+        work_dir=work_dir,
+        config_file=config_file,
+    ) == (target, config_file)
     assert target.read_bytes() == payload
+    assert config_file.read_text() == "tunnel: test\n"
+
+
+def test_kaggle_installer_requires_named_cloudflare_input(tmp_path: Path) -> None:
+    module = load_script()
+
+    with pytest.raises(FileNotFoundError, match="stanlukuvka/cloudflare-files"):
+        module.require_cloudflare_input(tmp_path / "missing")
+
+    source_dir = tmp_path / "cloudflare-files"
+    source_dir.mkdir()
+    with pytest.raises(FileNotFoundError, match="No Cloudflare tunnel config"):
+        module.require_cloudflare_input(source_dir)
+
+
+def test_cloudflare_starts_named_tunnel_for_comfy_lukuvka(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    binary = tmp_path / "cloudflared"
+    config = tmp_path / "cloudflare" / "config.yml"
+    config.parent.mkdir()
+    binary.write_bytes(b"\x7fELF")
+    config.write_text("tunnel: test\n")
+    monkeypatch.setattr(module, "APP_ROOT", tmp_path)
+    monkeypatch.setattr(module, "ensure_cloudflared", lambda: (binary, config))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs))
+        return Process()
+
+    monkeypatch.setattr(module.subprocess, "Popen", popen)
+
+    process, url = module.start_cloudflare(8188)
+
+    assert isinstance(process, Process)
+    assert url == "https://comfy.lukuvka.com"
+    assert calls[0][0] == [
+        str(binary),
+        "tunnel",
+        "--config",
+        str(config),
+        "--no-autoupdate",
+        "run",
+    ]
+    assert calls[0][1]["cwd"] == config.parent
 
 
 def test_kaggle_notebook_executes_the_versioned_installer_with_cloudflare() -> None:
@@ -178,6 +237,9 @@ def test_kaggle_notebook_executes_the_versioned_installer_with_cloudflare() -> N
 
     assert len(code_cells) == 1
     assert "".join(code_cells[0]["source"]).rstrip() == expected.rstrip()
+    assert "https://comfy.lukuvka.com" in expected
+    assert "stanlukuvka/cloudflare-files" in expected
+    assert "trycloudflare.com" not in expected
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:

@@ -38,7 +38,16 @@ EXTENSION_REF = os.environ.get(
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
 ENABLE_CLOUDFLARE = os.environ.get("H3_T4_ENABLE_CLOUDFLARE", "0") == "1"
-CLOUDFLARED = APP_ROOT / "cloudflared"
+CLOUDFLARE_PUBLIC_URL = "https://comfy.lukuvka.com"
+CLOUDFLARE_SOURCE_DIR = Path(
+    os.environ.get(
+        "H3_T4_CLOUDFLARE_SOURCE_DIR",
+        "/kaggle/input/datasets/stanlukuvka/cloudflare-files",
+    )
+)
+CLOUDFLARE_WORK_DIR = Path(os.environ.get("H3_T4_CLOUDFLARE_WORK_DIR", "/kaggle/working/cloudflare"))
+CLOUDFLARE_CONFIG_FILE = CLOUDFLARE_WORK_DIR / "config.yml"
+CLOUDFLARED = Path(os.environ.get("H3_T4_CLOUDFLARED", "/kaggle/working/cloudflared"))
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/download/2026.7.3/cloudflared-linux-amd64"
 CLOUDFLARED_SHA256 = "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17"
 
@@ -143,6 +152,15 @@ def find_models(*, input_root: Path = Path("/kaggle/input")) -> dict[str, Path]:
     return matches
 
 
+def require_cloudflare_input(source_dir: Path = CLOUDFLARE_SOURCE_DIR) -> Path:
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"Missing attached Kaggle input stanlukuvka/cloudflare-files: expected {source_dir}")
+    configs = sorted(source_dir.rglob("config.yml")) + sorted(source_dir.rglob("config.yaml"))
+    if not configs:
+        raise FileNotFoundError(f"No Cloudflare tunnel config found under {source_dir}")
+    return source_dir
+
+
 def link_models(sources: dict[str, Path]) -> None:
     for folder, names in REQUIRED_MODELS.items():
         target_dir = COMFY_DIR / "models" / folder
@@ -163,6 +181,8 @@ def install() -> None:
     require_full_commit(EXTENSION_REF, variable="H3_T4_EXTENSION_REF")
     require_two_t4s()
     model_sources = find_models()
+    if ENABLE_CLOUDFLARE:
+        require_cloudflare_input()
     if RESET_INSTALL and APP_ROOT.exists():
         shutil.rmtree(APP_ROOT)
     APP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -216,11 +236,52 @@ def validate_readiness(port: int) -> None:
         raise RuntimeError(f"Kaggle workflows were not installed: {missing_workflows}")
 
 
-def ensure_cloudflared() -> Path:
+def is_linux_elf(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def ensure_cloudflared(
+    *,
+    source_dir: Path = CLOUDFLARE_SOURCE_DIR,
+    work_dir: Path = CLOUDFLARE_WORK_DIR,
+    config_file: Path = CLOUDFLARE_CONFIG_FILE,
+) -> tuple[Path, Path]:
+    require_cloudflare_input(source_dir)
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    shutil.copytree(source_dir, work_dir, symlinks=False)
+
+    configs = sorted(work_dir.rglob("config.yml")) + sorted(work_dir.rglob("config.yaml"))
+    if not config_file.exists():
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(configs[0], config_file)
+
+    if not is_linux_elf(CLOUDFLARED):
+        CLOUDFLARED.unlink(missing_ok=True)
+        preferred = (
+            work_dir / "cloudflared",
+            work_dir / "cloudflared-linux-amd64",
+            source_dir / "cloudflared",
+            source_dir / "cloudflared-linux-amd64",
+        )
+        discovered = tuple(sorted(work_dir.rglob("cloudflared*"))) + tuple(sorted(source_dir.rglob("cloudflared*")))
+        for candidate in (*preferred, *discovered):
+            if is_linux_elf(candidate):
+                CLOUDFLARED.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(candidate, CLOUDFLARED)
+                break
     if CLOUDFLARED.exists():
         digest = hashlib.sha256(CLOUDFLARED.read_bytes()).hexdigest()
         if digest == CLOUDFLARED_SHA256:
-            return CLOUDFLARED
+            CLOUDFLARED.chmod(0o755)
+            for sensitive in (config_file, config_file.parent / "tunnel.json"):
+                if sensitive.exists():
+                    sensitive.chmod(0o600)
+            return CLOUDFLARED, config_file
         CLOUDFLARED.unlink()
     data = urllib.request.urlopen(CLOUDFLARED_URL, timeout=120).read()
     digest = hashlib.sha256(data).hexdigest()
@@ -228,33 +289,29 @@ def ensure_cloudflared() -> Path:
         raise RuntimeError(f"cloudflared checksum mismatch: {digest}")
     CLOUDFLARED.write_bytes(data)
     CLOUDFLARED.chmod(0o755)
-    return CLOUDFLARED
+    for sensitive in (config_file, config_file.parent / "tunnel.json"):
+        if sensitive.exists():
+            sensitive.chmod(0o600)
+    return CLOUDFLARED, config_file
 
 
 def start_cloudflare(port: int) -> tuple[subprocess.Popen[bytes], str]:
-    binary = ensure_cloudflared()
+    del port
+    binary, config = ensure_cloudflared()
     log_path = APP_ROOT / "cloudflared.log"
     log_handle = log_path.open("wb")
     process = subprocess.Popen(
-        [str(binary), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+        [str(binary), "tunnel", "--config", str(config), "--no-autoupdate", "run"],
         stdout=log_handle,
         stderr=subprocess.STDOUT,
+        cwd=config.parent,
     )
-    deadline = time.monotonic() + 90.0
-    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            log_handle.close()
-            raise RuntimeError(f"cloudflared exited early; see {log_path}")
-        text = log_path.read_text(errors="replace") if log_path.exists() else ""
-        match = pattern.search(text)
-        if match:
-            log_handle.close()
-            return process, match.group(0)
-        time.sleep(1.0)
-    process.terminate()
+    time.sleep(2.0)
+    if process.poll() is not None:
+        log_handle.close()
+        raise RuntimeError(f"cloudflared exited early; see {log_path}")
     log_handle.close()
-    raise TimeoutError(f"cloudflared did not publish a URL; see {log_path}")
+    return process, CLOUDFLARE_PUBLIC_URL
 
 
 def start() -> subprocess.Popen[bytes]:
@@ -282,4 +339,4 @@ if __name__ == "__main__":
     COMFY_PROCESS = start()
     if ENABLE_CLOUDFLARE:
         CLOUDFLARE_PROCESS, COMFY_URL = start_cloudflare(PORT)
-        print("Public ComfyUI URL:", COMFY_URL)
+        print("Named Cloudflare ComfyUI URL:", COMFY_URL)
