@@ -166,13 +166,18 @@ def test_cloudflared_download_is_checksum_pinned(monkeypatch, tmp_path: Path) ->
     assert target.read_bytes() == payload
 
 
-def test_kaggle_notebook_executes_the_versioned_installer() -> None:
+def test_kaggle_notebook_executes_the_versioned_installer_with_cloudflare() -> None:
     notebook_path = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
     notebook = json.loads(notebook_path.read_text())
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    expected = SCRIPT.read_text().replace(
+        "import os\n",
+        'import os\n\nos.environ["H3_T4_ENABLE_CLOUDFLARE"] = "1"\n',
+        1,
+    )
 
     assert len(code_cells) == 1
-    assert "".join(code_cells[0]["source"]).rstrip() == SCRIPT.read_text().rstrip()
+    assert "".join(code_cells[0]["source"]).rstrip() == expected.rstrip()
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
