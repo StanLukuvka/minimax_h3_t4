@@ -158,8 +158,8 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "2244789d41234d1d6302fe6234e18bc36955e47b" in code
-    assert "5f1fe6dc392a184963d16f5609736386570e9c9e19796108a172d6ca69c9efdc" in code
+    assert "ac6dd9ed6ece67b7c8bc889aee188ddf6db08fd0" in code
+    assert "3190f60ee37dd4a1846f3c88863dd070e88dfaf28705189f46c5a0e73ca3a8aa" in code
     for private_cloudflare_value in (
         "comfy.lukuvka.com",
         "cloudflare-files",
@@ -167,6 +167,12 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
         "trycloudflare.com",
     ):
         assert private_cloudflare_value not in notebook_text
+
+
+def test_git_stored_kaggle_installer_has_no_cloudflare_configuration() -> None:
+    source = SCRIPT.read_text().lower()
+    assert "cloudflare" not in source
+    assert "lukuvka.com" not in source
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
