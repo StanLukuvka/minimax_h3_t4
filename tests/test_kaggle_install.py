@@ -103,7 +103,7 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     monkeypatch.delenv("H3_T4_EXTENSION_REF", raising=False)
     module = load_script()
     assert module.EXTENSION_REPO == "https://github.com/StanLukuvka/minimax_h3_t4.git"
-    assert module.EXTENSION_REF == "7e9e992b9d40a7b7852a6196579c5330908a474d"
+    assert module.EXTENSION_REF == "2fd6749b5ba9fdd48383c4f78f5c31ffd466becf"
 
 
 def test_kaggle_installer_bootstraps_dedicated_app_python(monkeypatch, tmp_path: Path) -> None:
