@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from src.minimax_h3_t4.runtime.checkpoint import load_int8_checkpoint_mmap, require_int8_state_dict
+from src.minimax_h3_t4.runtime.checkpoint import (
+    load_int8_checkpoint_mmap,
+    normalize_state_dict_prefix,
+    require_int8_state_dict,
+)
 from src.minimax_h3_t4.runtime.worker import (
     H3T4Worker,
     reconstruct_nested_x0,
@@ -91,6 +95,25 @@ def test_checkpoint_loader_requires_safetensors_and_uses_cpu_mmap_loader() -> No
     assert calls == [("/models/h3.safetensors", "cpu")]
     with pytest.raises(ValueError, match="safetensors"):
         load_int8_checkpoint_mmap("/models/h3.ckpt", load_file=fake_load)
+
+
+def test_checkpoint_prefix_normalization_strips_model_namespace() -> None:
+    table = object()
+    weight = object()
+
+    normalized = normalize_state_dict_prefix(
+        {
+            "diffusion_model.adaln_t_table": table,
+            "diffusion_model.blocks.0.weight": weight,
+            "unrelated.weight": object(),
+        },
+        "diffusion_model.",
+    )
+
+    assert normalized == {
+        "adaln_t_table": table,
+        "blocks.0.weight": weight,
+    }
 
 
 def test_zero_noise_preserves_comfy_nested_av_container() -> None:

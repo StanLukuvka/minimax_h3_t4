@@ -40,6 +40,14 @@ def load_int8_checkpoint_mmap(
         return state_dict, handle.metadata() or {}
 
 
+def normalize_state_dict_prefix(state_dict: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Filter one model namespace and strip it from every retained key."""
+    normalized = {key[len(prefix) :]: value for key, value in state_dict.items() if key.startswith(prefix)}
+    if not normalized:
+        raise ValueError(f"Checkpoint has no model state under prefix {prefix!r}")
+    return normalized
+
+
 def require_int8_state_dict(state_dict: dict[str, Any]) -> None:
     """Fail closed unless every quantized payload is ComfyKitchen tensorwise INT8."""
     configs = [_decode(value) for key, value in state_dict.items() if key.endswith(".comfy_quant")]

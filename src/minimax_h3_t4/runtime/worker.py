@@ -5,7 +5,7 @@ import os
 from datetime import timedelta
 from typing import Any
 
-from .checkpoint import load_int8_checkpoint_mmap, require_int8_state_dict
+from .checkpoint import load_int8_checkpoint_mmap, normalize_state_dict_prefix, require_int8_state_dict
 from .topology import ExactH3T4Topology
 
 
@@ -94,9 +94,7 @@ class H3T4Worker:
         state_dict, metadata = load_int8_checkpoint_mmap(path)
         require_int8_state_dict(state_dict)
         prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
-        normalized = comfy.utils.state_dict_prefix_replace(state_dict, {prefix: ""}, filter_keys=True)
-        if normalized:
-            state_dict = normalized
+        state_dict = normalize_state_dict_prefix(state_dict, prefix)
         state_dict, metadata = comfy.utils.convert_old_quants(state_dict, "", metadata=metadata)
         config = comfy.model_detection.model_config_from_unet(state_dict, "", metadata=metadata)
         if config is None:
@@ -114,7 +112,10 @@ class H3T4Worker:
 
         patcher_class = h3_fsdp_patcher_class(comfy.model_patcher.ModelPatcher)
         patcher = patcher_class(model, load_device, offload_device, size=local_model_size)
-        full_state = patcher.model_state_dict(filter_prefix="diffusion_model.")
+        full_state = normalize_state_dict_prefix(
+            patcher.model_state_dict(filter_prefix="diffusion_model."),
+            "diffusion_model.",
+        )
         diffusion = model.diffusion_model
         diffusion.to("meta")
         fully_shard_bottom_up(
