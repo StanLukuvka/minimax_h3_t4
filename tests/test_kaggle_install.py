@@ -225,21 +225,24 @@ def test_cloudflare_starts_named_tunnel_for_comfy_lukuvka(monkeypatch, tmp_path:
     assert calls[0][1]["cwd"] == config.parent
 
 
-def test_kaggle_notebook_executes_the_versioned_installer_with_cloudflare() -> None:
+def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     notebook_path = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
-    notebook = json.loads(notebook_path.read_text())
+    notebook_text = notebook_path.read_text()
+    notebook = json.loads(notebook_text)
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
-    expected = SCRIPT.read_text().replace(
-        "import os\n",
-        'import os\n\nos.environ["H3_T4_ENABLE_CLOUDFLARE"] = "1"\n',
-        1,
-    )
 
     assert len(code_cells) == 1
-    assert "".join(code_cells[0]["source"]).rstrip() == expected.rstrip()
-    assert "https://comfy.lukuvka.com" in expected
-    assert "stanlukuvka/cloudflare-files" in expected
-    assert "trycloudflare.com" not in expected
+    code = "".join(code_cells[0]["source"])
+    compile(code, str(notebook_path), "exec")
+    assert "2244789d41234d1d6302fe6234e18bc36955e47b" in code
+    assert "5f1fe6dc392a184963d16f5609736386570e9c9e19796108a172d6ca69c9efdc" in code
+    for private_cloudflare_value in (
+        "comfy.lukuvka.com",
+        "cloudflare-files",
+        "H3_T4_ENABLE_CLOUDFLARE",
+        "trycloudflare.com",
+    ):
+        assert private_cloudflare_value not in notebook_text
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
