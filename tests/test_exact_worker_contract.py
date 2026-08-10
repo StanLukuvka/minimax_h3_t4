@@ -11,6 +11,10 @@ from src.minimax_h3_t4.runtime.checkpoint import (
     normalize_state_dict_prefix,
     require_int8_state_dict,
 )
+from src.minimax_h3_t4.runtime.ulysses import (
+    inject_minimax_h3_ulysses,
+    passthrough_preprocess_text_embeds,
+)
 from src.minimax_h3_t4.runtime.worker import (
     H3T4Worker,
     reconstruct_nested_x0,
@@ -124,6 +128,63 @@ def test_checkpoint_prefix_normalization_keeps_bare_keys_when_prefix_unused() ->
     normalized = normalize_state_dict_prefix(bare, fallback_prefix)
 
     assert normalized is bare  # unchanged (bare), as the old contract did
+
+
+def test_ulysses_injection_defers_text_projection_to_root_forward() -> None:
+    """FSDP forbids forwarding a sharded leaf (condition_proj) before the root.
+
+    ``MiniMaxH3.extra_conds`` calls ``preprocess_text_embeds``, which would run
+    ``condition_proj``/``token_refiner`` as the first forward on the sharded tree.
+    The runtime must replace that with an identity pass-through so projection is
+    deferred into the root forward (``h3_ulysses_forward``), preserving FSDP's
+    "enter through root first" invariant.
+    """
+    calls = []
+
+    class Attn:
+        pass
+
+    class Block:
+        def __init__(self):
+            self.attn = Attn()
+
+    class MiniMaxH3:
+        pass
+
+    class Diffusion(MiniMaxH3):
+        def __init__(self):
+            self.blocks = [Block(), Block()]
+            self._forward = "original"
+            self.preprocess_text_embeds = lambda self, text: (calls.append(("orig", text)), object())[1]
+
+    class Base(MiniMaxH3):
+        diffusion_model = Diffusion()
+
+    class Patcher:
+        model = Base()
+
+    patcher = inject_minimax_h3_ulysses(
+        Patcher(),
+        minimax_h3_class=MiniMaxH3,
+        attention_forward=lambda self, *a, **k: "attn",
+        dit_forward=lambda *a, **k: "dit",
+    )
+    diffusion = patcher.model.diffusion_model
+
+    # preprocess_text_embeds must be an identity pass-through (no sharded leaf).
+    token = object()
+    out = diffusion.preprocess_text_embeds(token)
+    assert out is token
+    assert calls == []  # original eager projection never invoked
+    # _forward + attention still injected.
+    assert diffusion._forward != "original"  # injected (callable bound method)
+    assert callable(diffusion._forward)
+    assert diffusion.blocks[0].attn.forward() == "attn"
+
+
+def test_passthrough_preprocess_returns_input_unchanged() -> None:
+    token = object()
+    assert passthrough_preprocess_text_embeds(object(), token) is token
 
 
 def test_zero_noise_preserves_comfy_nested_av_container() -> None:
