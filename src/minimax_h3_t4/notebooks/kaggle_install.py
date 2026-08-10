@@ -32,7 +32,7 @@ EXTENSION_REPO = os.environ.get(
 )
 EXTENSION_REF = os.environ.get(
     "H3_T4_EXTENSION_REF",
-    "ce55d4d01fba8da7656cefd22848427b33bcd3dd",
+    "4950eb7e60132c1554ae65b5ff89d90a000f14ac",
 )
 RESET_INSTALL = os.environ.get("H3_T4_RESET_INSTALL", "0") == "1"
 PORT = int(os.environ.get("H3_T4_PORT", "8188"))
