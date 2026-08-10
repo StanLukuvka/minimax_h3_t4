@@ -41,11 +41,20 @@ def load_int8_checkpoint_mmap(
 
 
 def normalize_state_dict_prefix(state_dict: dict[str, Any], prefix: str) -> dict[str, Any]:
-    """Filter one model namespace and strip it from every retained key."""
-    normalized = {key[len(prefix) :]: value for key, value in state_dict.items() if key.startswith(prefix)}
-    if not normalized:
-        raise ValueError(f"Checkpoint has no model state under prefix {prefix!r}")
-    return normalized
+    """Strip ``prefix`` from every matching key, mirroring ComfyUI loading.
+
+    ``unet_prefix_from_state_dict`` may return ``"model."`` as a bare fallback even
+    when no key carries that namespace. Mirror the prior working contract:
+    only rewrite keys that actually start with ``prefix``; keys that do not are
+    left unchanged (bare), matching ``state_dict_prefix_replace(..., filter_keys=True)``
+    when it yields no rewrite.
+    """
+    if any(key.startswith(prefix) for key in state_dict):
+        normalized = {key[len(prefix) :]: value for key, value in state_dict.items() if key.startswith(prefix)}
+        if not normalized:
+            raise ValueError(f"Checkpoint has no model state under prefix {prefix!r}")
+        return normalized
+    return state_dict
 
 
 def require_int8_state_dict(state_dict: dict[str, Any]) -> None:

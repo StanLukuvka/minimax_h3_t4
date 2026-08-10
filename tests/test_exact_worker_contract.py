@@ -97,7 +97,7 @@ def test_checkpoint_loader_requires_safetensors_and_uses_cpu_mmap_loader() -> No
         load_int8_checkpoint_mmap("/models/h3.ckpt", load_file=fake_load)
 
 
-def test_checkpoint_prefix_normalization_strips_model_namespace() -> None:
+def test_checkpoint_prefix_normalization_strips_matching_namespace() -> None:
     table = object()
     weight = object()
 
@@ -114,6 +114,16 @@ def test_checkpoint_prefix_normalization_strips_model_namespace() -> None:
         "adaln_t_table": table,
         "blocks.0.weight": weight,
     }
+
+
+def test_checkpoint_prefix_normalization_keeps_bare_keys_when_prefix_unused() -> None:
+    fallback_prefix = "model."
+    # ComfyUI returns "model." as a bare fallback even when no key carries it.
+    bare = {"adaln_t_table": object(), "blocks.0.weight": object()}
+
+    normalized = normalize_state_dict_prefix(bare, fallback_prefix)
+
+    assert normalized is bare  # unchanged (bare), as the old contract did
 
 
 def test_zero_noise_preserves_comfy_nested_av_container() -> None:
