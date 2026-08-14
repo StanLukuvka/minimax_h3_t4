@@ -3,6 +3,8 @@
 Apache-2.0 donor provenance is recorded in NOTICE.md.
 """
 
+import os
+
 import torch
 
 import comfy
@@ -21,6 +23,7 @@ from comfy.ldm.minimax.model import (
 from xfuser.core.distributed import get_sequence_parallel_rank, get_sequence_parallel_world_size, get_sp_group
 
 from .attention import make_ulysses_attention
+from .memory_trace import memory_snapshot as _mem_snapshot, memory_trace_enabled as _trace_enabled
 from .utils import pad_to_world_size
 
 
@@ -30,16 +33,16 @@ _H3_ATTN_PROFILE_DONE = False
 _H3_FORWARD_COUNT = 0
 
 
-def h3_memory_snapshot(*args, **kwargs):
-    return None
+def h3_memory_snapshot(tag, **extra):
+    _mem_snapshot(tag, device=torch.cuda.current_device() if torch.cuda.is_available() else None, extra=extra)
+
+
+def h3_memory_trace_enabled():
+    return _trace_enabled()
 
 
 def h3_cuda_phase_report(*args, **kwargs):
     return None
-
-
-def h3_memory_trace_enabled():
-    return False
 
 
 def h3_phase_profile_active():
@@ -51,7 +54,7 @@ def h3_phase_profile_enabled():
 
 
 def h3_stop_after_first_forward():
-    return False
+    return _trace_enabled() and os.environ.get("H3_T4_STOP_AFTER_FIRST_FORWARD", "1") == "1"
 
 
 def set_h3_phase_profile_active(_active):
@@ -79,6 +82,7 @@ def _split_packed_sequence(h, rope_freqs, mod_segments):
 def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     global _H3_ATTN_PROFILE_DONE
     profile_this_attention = h3_phase_profile_active() and not _H3_ATTN_PROFILE_DONE
+    trace_this_attention = h3_memory_trace_enabled()
     phase_events = []
 
     def mark_phase():
@@ -92,9 +96,10 @@ def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     phase_start = mark_phase()
     q, k, v = self.qkv_proj(x).split(self.heads * self.head_dim, dim=-1)
     phase_end = mark_phase()
+    if trace_this_attention:
+        h3_memory_snapshot("h3_attention_after_qkv", local_rows=sequence_length, heads=self.heads, head_dim=self.head_dim)
     if profile_this_attention:
         phase_events.append(("qkv_projection", phase_start, phase_end))
-        h3_memory_snapshot("h3_attention_after_qkv", local_rows=sequence_length)
     phase_start = mark_phase()
     v = v.view(sequence_length, self.heads, self.head_dim)
     if rope_freqs is not None:
@@ -112,6 +117,8 @@ def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     else:
         q = self.q_norm(q.view(sequence_length, self.heads, self.head_dim))
         k = self.k_norm(k.view(sequence_length, self.heads, self.head_dim))
+    if trace_this_attention:
+        h3_memory_snapshot("h3_attention_after_rmsnorm_rope", local_rows=sequence_length)
     phase_end = mark_phase()
     if profile_this_attention:
         phase_events.append(("rmsnorm_rope", phase_start, phase_end))
@@ -120,8 +127,12 @@ def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     k = k.transpose(0, 1).unsqueeze(0)
     v = v.transpose(0, 1).unsqueeze(0)
     phase_start = mark_phase()
+    if trace_this_attention:
+        h3_memory_snapshot("h3_attention_before_ulysses", local_rows=sequence_length)
     out = xfuser_optimized_attention(q, k, v, self.heads, skip_reshape=True)
     phase_end = mark_phase()
+    if trace_this_attention:
+        h3_memory_snapshot("h3_attention_after_ulysses", local_rows=sequence_length)
     if profile_this_attention:
         phase_events.append(("ulysses_attention", phase_start, phase_end))
         h3_memory_snapshot("h3_attention_after_ulysses", local_rows=sequence_length)
@@ -260,6 +271,8 @@ def h3_ulysses_forward(self, x, timestep, context, transformer_options={}, minim
         else:  # ref_audio / audio
             h[a:b] = audio_embed[aoff : aoff + n]
             aoff += n
+    if trace_this_forward:
+        h3_memory_snapshot("h3_after_embed", seq_len=layout.seq_len)
 
     t_vals = torch.tensor(unique_t, dtype=torch.float32, device=device)
     if self.use_adaln_curves:
@@ -302,6 +315,8 @@ def h3_ulysses_forward(self, x, timestep, context, transformer_options={}, minim
                 torch.cuda.reset_peak_memory_stats()
                 h3_memory_snapshot("h3_block_start", block=i, local_rows=hidden.shape[0])
             comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, block)
+            if trace_this_forward:
+                h3_memory_snapshot("h3_block_after_prefetch", block=i, local_rows=hidden.shape[0])
             if profile_this_forward and i == 0:
                 set_h3_phase_profile_active(True)
             if ("double_block", i) in blocks_replace:

@@ -158,8 +158,8 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "a308044b61f423971d1ed4806a3c5abd16c4a281" in code
-    assert "ff130e76f63f2c104f7f4af5f57f539cb0c4f559bfcf7231aab0adcb3941c140" in code
+    assert "864c6e2565ebf9ad6e3575cbd7de491124f68fb3" in code
+    assert "92676d072f79afa0982b5e5b534adcb6e3ce4552ed411d9a0da827adea7c2d6f" in code
     for private_cloudflare_value in (
         "comfy.lukuvka.com",
         "cloudflare-files",
