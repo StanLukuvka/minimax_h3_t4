@@ -93,7 +93,7 @@ class H3T4Worker:
         install_int8_cuda_oom_retry(torch)
         cpu_offload = bool(self.config.get("fsdp_cpu_offload", False))
         # Enable mmap-backed checkpoint loading to avoid a full per-worker
-        # RAM peak. Raylight uses this same flag to stay under host-RAM limits.
+        # RAM peak on constrained Kaggle hosts.
         import comfy.utils as _cu
         _cu.MMAP_TORCH_FILES = True
         state_dict, metadata = load_int8_checkpoint_mmap(path)
