@@ -148,8 +148,6 @@ class H3T4Worker:
             attention_forward=h3_ulysses_attention,
             dit_forward=h3_ulysses_forward,
         )
-        state_dict.clear()
-        full_state.clear()
         gc.collect()
         torch.cuda.empty_cache()
         self.model = patcher
