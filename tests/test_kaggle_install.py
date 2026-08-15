@@ -103,7 +103,7 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     monkeypatch.delenv("H3_T4_EXTENSION_REF", raising=False)
     module = load_script()
     assert module.EXTENSION_REPO == "https://github.com/StanLukuvka/minimax_h3_t4.git"
-    assert module.EXTENSION_REF == "4950eb7e60132c1554ae65b5ff89d90a000f14ac"
+    assert module.EXTENSION_REF == "79470776c6ba7326938981a0ae97a41f52cf483e"
 
 
 def test_kaggle_installer_bootstraps_dedicated_app_python(monkeypatch, tmp_path: Path) -> None:
@@ -158,8 +158,8 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "864c6e2565ebf9ad6e3575cbd7de491124f68fb3" in code
-    assert "92676d072f79afa0982b5e5b534adcb6e3ce4552ed411d9a0da827adea7c2d6f" in code
+    assert "79470776c6ba7326938981a0ae97a41f52cf483e" in code
+    assert "30c3bac4fa64d37bf92ce5e88a4a1fd1b13ac5bd3d0e85ab75dd86c4fd500ef7" in code
     for private_cloudflare_value in (
         "comfy.lukuvka.com",
         "cloudflare-files",

@@ -91,6 +91,7 @@ class H3T4Worker:
         from .ulysses import inject_minimax_h3_ulysses
 
         install_int8_cuda_oom_retry(torch)
+        cpu_offload = bool(self.config.get("fsdp_cpu_offload", False))
         state_dict, metadata = load_int8_checkpoint_mmap(path)
         require_int8_state_dict(state_dict)
         prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
@@ -111,16 +112,21 @@ class H3T4Worker:
         from .patcher import h3_fsdp_patcher_class
 
         patcher_class = h3_fsdp_patcher_class(comfy.model_patcher.ModelPatcher)
-        patcher = patcher_class(model, load_device, offload_device, size=local_model_size)
+        patcher = patcher_class(model, load_device, offload_device, size=local_model_size, cpu_offload=cpu_offload)
         full_state = normalize_state_dict_prefix(
             patcher.model_state_dict(filter_prefix="diffusion_model."),
             "diffusion_model.",
         )
         diffusion = model.diffusion_model
         diffusion.to("meta")
+        fsdp_kwargs: dict[str, Any] = {"mesh": self.device_mesh, "reshard_after_forward": True}
+        if cpu_offload:
+            from torch.distributed.fsdp import CPUOffloadPolicy
+
+            fsdp_kwargs["offload_policy"] = CPUOffloadPolicy(pin_memory=True)
         fully_shard_bottom_up(
             diffusion,
-            fsdp_kwargs={"mesh": self.device_mesh, "reshard_after_forward": True},
+            fsdp_kwargs=fsdp_kwargs,
             native_ignore_scale=False,
         )
         load_from_full_model_state_dict(
@@ -128,7 +134,7 @@ class H3T4Worker:
             full_state,
             self.device,
             strict=True,
-            cpu_offload=False,
+            cpu_offload=cpu_offload,
             release_sd=True,
         )
         inject_minimax_h3_ulysses(

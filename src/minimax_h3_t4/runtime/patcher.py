@@ -12,6 +12,10 @@ def h3_fsdp_patcher_class(base_class: type[Any]) -> type[Any]:
     """Return a narrow patcher that never moves FSDP DTensors between devices."""
 
     class H3T4FSDPModelPatcher(base_class):
+        def __init__(self, *args: Any, cpu_offload: bool = False, **kwargs: Any) -> None:
+            self._h3_cpu_offload = cpu_offload
+            super().__init__(*args, **kwargs)
+
         def is_dynamic(self) -> bool:
             return False
 
@@ -27,13 +31,17 @@ def h3_fsdp_patcher_class(base_class: type[Any]) -> type[Any]:
             previous = int(getattr(self.model, "model_loaded_weight_memory", 0))
             self.model.model_lowvram = False
             self.model.lowvram_patch_counter = 0
-            self.model.model_loaded_weight_memory = self.model_size()
+            # When FSDP CPU offloading is active, parameters live on host RAM.
+            # Report zero GPU resident weight memory so ComfyUI's VRAM tracker
+            # doesn't assume the model occupies GPU space during inference.
+            gpu_weight = 0 if self._h3_cpu_offload else self.model_size()
+            self.model.model_loaded_weight_memory = gpu_weight
             self.model.model_offload_buffer_memory = 0
             self.model.device = self.load_device if device_to is None else device_to
             self.model.current_weight_patches_uuid = self.patches_uuid
             self.model.current_patcher = self
             self.inject_model()
-            return max(0, self.model_size() - previous)
+            return max(0, gpu_weight - previous)
 
         def load(
             self,

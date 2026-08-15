@@ -34,7 +34,7 @@ def test_worker_rejects_any_topology_drift() -> None:
         "cfg_degree": 1,
         "dp_degree": 1,
         "fsdp": True,
-        "fsdp_cpu_offload": False,
+        "fsdp_cpu_offload": True,
         "attention": "TORCH_EFFICIENT",
     }
     validate_worker_config(exact)
@@ -46,7 +46,7 @@ def test_worker_rejects_any_topology_drift() -> None:
         "cfg_degree": 2,
         "dp_degree": 2,
         "fsdp": False,
-        "fsdp_cpu_offload": True,
+        "fsdp_cpu_offload": False,
         "attention": "TORCH_FLASH",
     }.items():
         drifted = dict(exact)

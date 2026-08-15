@@ -25,7 +25,7 @@ def test_topology_is_the_exact_two_t4_slice() -> None:
         "cfg_degree": 1,
         "dp_degree": 1,
         "fsdp": True,
-        "fsdp_cpu_offload": False,
+        "fsdp_cpu_offload": True,
         "attention": "TORCH_EFFICIENT",
     }
 

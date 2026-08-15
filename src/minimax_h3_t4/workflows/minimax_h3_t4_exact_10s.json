@@ -1355,7 +1355,7 @@
       "mode": "exact",
       "gpus": 2,
       "ulysses_degree": 2,
-      "fsdp_cpu_offload": false,
+      "fsdp_cpu_offload": true,
       "attention": "TORCH_EFFICIENT",
       "profile": {
         "width": 736,

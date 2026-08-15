@@ -13,7 +13,7 @@ class ExactH3T4Topology:
     cfg_degree: int = 1
     dp_degree: int = 1
     fsdp: bool = True
-    fsdp_cpu_offload: bool = False
+    fsdp_cpu_offload: bool = True
     attention: str = "TORCH_EFFICIENT"
 
     def as_worker_config(self) -> dict[str, object]:

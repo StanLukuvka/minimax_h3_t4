@@ -49,10 +49,10 @@ class Model:
         return self
 
 
-def make_patcher():
+def make_patcher(cpu_offload: bool = False):
     patcher_type = h3_fsdp_patcher_class(FakeBasePatcher)
     model = Model()
-    return patcher_type(model, "cuda:0", "cpu", size=10_000), model
+    return patcher_type(model, "cuda:0", "cpu", size=10_000, cpu_offload=cpu_offload), model
 
 
 def test_h3_fsdp_patcher_marks_preloaded_shards_without_moving_model() -> None:
@@ -65,6 +65,17 @@ def test_h3_fsdp_patcher_marks_preloaded_shards_without_moving_model() -> None:
     assert model.current_patcher is patcher
     assert patcher.injected
     assert model.to_calls == []
+
+
+def test_h3_fsdp_patcher_reports_zero_gpu_memory_when_cpu_offloaded() -> None:
+    patcher, model = make_patcher(cpu_offload=True)
+
+    loaded = patcher.partially_load("cuda:0", extra_memory=10_000)
+
+    assert loaded == 0
+    assert model.model_loaded_weight_memory == 0
+    assert model.current_patcher is patcher
+    assert patcher.injected
 
 
 def test_h3_fsdp_patcher_never_offloads_dtensor_model() -> None:
