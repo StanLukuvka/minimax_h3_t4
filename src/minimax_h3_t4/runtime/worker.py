@@ -157,6 +157,94 @@ class H3T4Worker:
         self.model = patcher
         return True
 
+    def load_unet_from_state_dict(self, state_dict_ref: Any, weight_dtype: str) -> bool:
+        """Load model from an already-loaded state dict (broadcast from main process).
+        
+        This avoids the double-RAM peak when multiple workers each load the full checkpoint.
+        Each worker streams its own sharded keys from the shared state dict via Ray Object Store.
+        """
+        if weight_dtype != "int8":
+            raise ValueError("MiniMax-H3 two-T4 worker is INT8-only")
+        import torch
+        import comfy.model_detection
+        import comfy.model_management
+        import comfy.model_patcher
+        import comfy.utils
+        
+        from .fsdp import fully_shard_bottom_up, load_from_full_model_state_dict
+        from .h3_forward import h3_ulysses_attention, h3_ulysses_forward
+        from .int8 import install_int8_cuda_oom_retry
+        from .ulysses import inject_minimax_h3_ulysses
+
+        # Get state dict from Ray Object Store
+        state_dict = self.config.get("_shared_state_dict")
+        if state_dict is None:
+            # Fallback: load from path as before
+            raise RuntimeError("No shared state dict available for this worker")
+            
+        install_int8_cuda_oom_retry(torch)
+        cpu_offload = bool(self.config.get("fsdp_cpu_offload", False))
+        
+        # Use the shared state dict directly - no disk load needed
+        require_int8_state_dict(state_dict)
+        prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
+        state_dict = normalize_state_dict_prefix(state_dict, prefix)
+        state_dict, metadata = comfy.utils.convert_old_quants(state_dict, "", metadata={})
+        config = comfy.model_detection.model_config_from_unet(state_dict, "", metadata=metadata)
+        if config is None:
+            raise ValueError("Checkpoint is not a native ComfyUI MiniMax-H3 model")
+        model = config.get_model(state_dict, "")
+        from comfy.model_base import MiniMaxH3
+
+        if not isinstance(model, MiniMaxH3):
+            raise TypeError(f"Expected MiniMax-H3 checkpoint, detected {type(model).__name__}")
+        load_device = comfy.model_management.get_torch_device()
+        offload_device = comfy.model_management.unet_offload_device()
+        model.load_model_weights(state_dict, "", assign=True)
+        # Drop the checkpoint now that the model owns its weights
+        del state_dict
+        gc.collect()
+        torch.cuda.empty_cache()
+        local_model_size = max(1, comfy.model_management.module_size(model) // 2)
+        from .patcher import h3_fsdp_patcher_class
+
+        patcher_class = h3_fsdp_patcher_class(comfy.model_patcher.ModelPatcher)
+        patcher = patcher_class(model, load_device, offload_device, size=local_model_size, cpu_offload=cpu_offload)
+        full_state = normalize_state_dict_prefix(
+            patcher.model_state_dict(filter_prefix="diffusion_model."),
+            "diffusion_model.",
+        )
+        diffusion = model.diffusion_model
+        diffusion.to("meta")
+        fsdp_kwargs: dict[str, Any] = {"mesh": self.device_mesh, "reshard_after_forward": True}
+        if cpu_offload:
+            from torch.distributed.fsdp import CPUOffloadPolicy
+
+            fsdp_kwargs["offload_policy"] = CPUOffloadPolicy(pin_memory=True)
+        fully_shard_bottom_up(
+            diffusion,
+            fsdp_kwargs=fsdp_kwargs,
+            native_ignore_scale=False,
+        )
+        load_from_full_model_state_dict(
+            diffusion,
+            full_state,
+            self.device,
+            strict=True,
+            cpu_offload=cpu_offload,
+            release_sd=True,
+        )
+        inject_minimax_h3_ulysses(
+            patcher,
+            minimax_h3_class=MiniMaxH3,
+            attention_forward=h3_ulysses_attention,
+            dit_forward=h3_ulysses_forward,
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
+        self.model = patcher
+        return True
+
     def configure_spectrum(self, config: dict[str, Any]) -> bool:
         if self.model is None:
             raise RuntimeError("load the MiniMax-H3 model before configuring Spectrum")

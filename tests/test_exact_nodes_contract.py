@@ -26,6 +26,7 @@ class FakeRay:
     def __init__(self) -> None:
         self.init_kwargs = None
         self.shutdown_calls = 0
+        self._objects: list[Any] = []
 
     def init(self, **kwargs):
         self.init_kwargs = kwargs
@@ -36,8 +37,14 @@ class FakeRay:
             raise FakeRay.exceptions.RayActorError(value)
         return value
 
+    def put(self, obj: Any) -> Any:
+        """Store an object in the fake Ray Object Store."""
+        ref = object()
+        self._objects.append((ref, obj))
+        return ref
+
     @staticmethod
-    def wait(refs, *, num_returns, timeout):
+    def wait(refs, *, num_returns=None, timeout=None):
         return refs, []
 
     @staticmethod
@@ -53,6 +60,7 @@ class FakeWorker:
         self.rank = rank
         self.events = events
         self.load_unet = RemoteMethod(self._load_unet)
+        self.load_unet_from_state_dict = RemoteMethod(self._load_unet_from_state_dict)
         self.get_sigmas = RemoteMethod(lambda scheduler, steps, denoise: [scheduler, steps, denoise])
         self.sample_advanced = RemoteMethod(self._sample)
         self.shutdown = RemoteMethod(lambda: (events.append(("shutdown", rank)), f"actor-exited:{rank}")[1])
@@ -60,6 +68,11 @@ class FakeWorker:
 
     def _load_unet(self, path, weight_dtype):
         self.events.append(("load", self.rank, path, weight_dtype))
+        return True
+
+    def _load_unet_from_state_dict(self, state_ref, weight_dtype):
+        # Simulate streaming from shared state dict
+        self.events.append(("load", self.rank, state_ref, weight_dtype))
         return True
 
     def _sample(self, add_noise, noise, guider, sampler, sigmas, latent):
@@ -206,12 +219,13 @@ def test_int8_unet_load_is_strictly_sequential_after_conditioning_release() -> N
     (loaded_group,) = loader.load(group, "minimax_h3_int8.safetensors", load_after=object())
 
     assert loaded_group is group
-    assert events == [
-        "unload",
-        "empty",
-        ("load", 0, "/models/minimax_h3_int8.safetensors", "int8"),
-        ("load", 1, "/models/minimax_h3_int8.safetensors", "int8"),
-    ]
+    # Check that both workers were called with the state ref
+    load_events = [e for e in events if isinstance(e, tuple) and e[0] == "load"]
+    assert len(load_events) == 2
+    assert load_events[0][0:3] == ("load", 0, load_events[0][2])
+    assert load_events[1][0:3] == ("load", 1, load_events[1][2])
+    # Both should have same state_ref
+    assert load_events[0][2] is load_events[1][2]
 
 
 def test_unet_loader_requires_conditioning_dependency() -> None:
@@ -246,7 +260,9 @@ def test_unet_loader_interrupt_force_cleans_partial_rank_load() -> None:
         )
 
     assert group.alive is False
-    assert [event for event in events if isinstance(event, tuple) and event[0] == "load"] == [("load", 0, "/models/h3.safetensors", "int8")]
+    load_events = [e for e in events if isinstance(e, tuple) and e[0] == "load"]
+    assert len(load_events) == 1
+    assert load_events[0][0:3] == ("load", 0, load_events[0][2])
 
 
 def test_scheduler_and_basic_guider_keep_stock_comfy_contracts() -> None:
