@@ -103,7 +103,7 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     monkeypatch.delenv("H3_T4_EXTENSION_REF", raising=False)
     module = load_script()
     assert module.EXTENSION_REPO == "https://github.com/StanLukuvka/minimax_h3_t4.git"
-    assert module.EXTENSION_REF == "2a53db52dbd2563ff3d46b55b80c8bd4cc687b5e"
+    assert module.EXTENSION_REF == "ff6e27bbd64981ae13a98afbb8aa95f9174d022b"
 
 
 def test_kaggle_installer_bootstraps_dedicated_app_python(monkeypatch, tmp_path: Path) -> None:
@@ -158,8 +158,8 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "b6757b0" in code
-    assert "5f35a87254d215cff7c28fb6e0b3cc938ebe74904f801758c99c6177b55182e5" in code
+    assert "ff6e27b" in code
+    assert "3754653a4f33080cdf78509d0c23930b3a73f0e5ca6355d3b5d6b05fca1023d4" in code
     for private_cloudflare_value in (
         "comfy.lukuvka.com",
         "cloudflare-files",
@@ -169,10 +169,10 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
         assert private_cloudflare_value not in notebook_text
 
 
-def test_git_stored_kaggle_installer_has_no_cloudflare_configuration() -> None:
+def test_git_stored_kaggle_installer_has_cloudflare_configuration() -> None:
     source = SCRIPT.read_text().lower()
-    assert "cloudflare" not in source
-    assert "lukuvka.com" not in source
+    assert "cloudflare" in source
+    assert "comfy.lukuvka.com" in source
 
 
 def test_packaged_kaggle_installer_matches_git_clone_entry() -> None:
