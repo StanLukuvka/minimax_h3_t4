@@ -99,7 +99,7 @@ def test_initializer_contract_is_fixed_and_object_store_is_bounded() -> None:
     assert "GPU" not in required
     assert "ulysses_degree" not in required
     assert "FSDP" not in required
-    assert required["ray_object_store_gb"][1]["max"] == 1.0
+    assert required["ray_object_store_gb"][1]["max"] == 16.0
     assert H3T4Initializer.RETURN_TYPES == ("H3T4_ACTOR_GROUP",)
 
 
@@ -113,7 +113,7 @@ def test_initializer_requires_conditioning_before_ray_start() -> None:
     )
 
     with pytest.raises(ValueError, match="requires conditioning"):
-        initializer.initialize("minimax-h3-t4", "0,1", 0.5, None)
+        initializer.initialize("minimax-h3-t4", "0,1", 4.0, None)
     assert fake_ray.init_kwargs is None
 
 
@@ -142,11 +142,11 @@ def test_initializer_releases_conditioning_before_ray_init(monkeypatch) -> None:
     )
     monkeypatch.setattr(fake_ray, "init", lambda **kwargs: (events.append("ray.init"), setattr(fake_ray, "init_kwargs", kwargs)))
 
-    (group,) = initializer.initialize(load_after=object(), ray_object_store_gb=0.5)
+    (group,) = initializer.initialize(load_after=object(), ray_object_store_gb=4.0)
 
     assert events[:3] == ["unload", "empty", "ray.init"]
     assert len(group.workers) == 2
-    assert fake_ray.init_kwargs["object_store_memory"] == 512 * 1024**2
+    assert fake_ray.init_kwargs["object_store_memory"] == 4 * 1024**3
     assert fake_ray.init_kwargs["runtime_env"] is runtime_env
 
 

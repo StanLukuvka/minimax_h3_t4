@@ -211,9 +211,9 @@ class H3T4Worker:
 
     def load_unet_from_state_dict(self, state_dict_ref: Any, weight_dtype: str) -> bool:
         """Load model from an already-loaded state dict (broadcast from main process).
-        
+
         This avoids the double-RAM peak when multiple workers each load the full checkpoint.
-        Each worker streams its own sharded keys from the shared state dict via Ray Object Store.
+        Each worker resolves its own reference from the shared state dict via Ray Object Store.
         """
         if weight_dtype != "int8":
             raise ValueError("MiniMax-H3 two-T4 worker is INT8-only")
@@ -222,18 +222,23 @@ class H3T4Worker:
         import comfy.model_management
         import comfy.model_patcher
         import comfy.utils
-        
+
         from .fsdp import fully_shard_bottom_up, load_from_full_model_state_dict
         from .h3_forward import h3_ulysses_attention, h3_ulysses_forward
         from .int8 import install_int8_cuda_oom_retry
         from .ulysses import inject_minimax_h3_ulysses
 
-        # Get state dict from Ray Object Store
-        state_dict = self.config.get("_shared_state_dict")
+        # Resolve the Ray object reference to get the actual state dict
+        ray_get = self.config.get("_ray_get")
+        if ray_get is not None:
+            state_dict = ray_get(state_dict_ref)  # type: ignore[misc]
+        else:
+            # Fallback for test environments that don't set up Ray
+            state_dict = state_dict_ref
+
         if state_dict is None:
-            # Fallback: load from path as before
             raise RuntimeError("No shared state dict available for this worker")
-            
+
         install_int8_cuda_oom_retry(torch)
         cpu_offload = bool(self.config.get("fsdp_cpu_offload", False))
         

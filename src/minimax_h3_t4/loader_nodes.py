@@ -76,7 +76,7 @@ class H3T4Initializer:
                 "GPU_SELECT": ("STRING", {"default": "0,1"}),
                 "ray_object_store_gb": (
                     "FLOAT",
-                    {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.1},
+                    {"default": 4.0, "min": 4.0, "max": 16.0, "step": 0.5},
                 ),
                 "load_after": ("CONDITIONING",),
             }
@@ -100,10 +100,13 @@ class H3T4Initializer:
         self._worker_factory = worker_factory
         self._runtime_env_builder = runtime_env_builder or _build_runtime_env
 
-    def _create_worker(self, rank: int, config: dict[str, object]) -> Any:
+    def _create_worker(self, rank: int, config: dict[str, object], ray_module: Any) -> Any:
         if self._worker_factory is not None:
             return self._worker_factory(rank, config)
         from .runtime.worker import H3T4Worker
+
+        # Pass ray.get into worker config so it can resolve shared state dict refs
+        config = {**config, "_ray_get": ray_module.get}
 
         # Cap per-worker memory via Ray's memory option
         max_ram_gb = float(os.environ.get("H3_T4_MAX_RAM_GB", "29"))
@@ -115,15 +118,15 @@ class H3T4Initializer:
         self,
         ray_cluster_namespace: str = "minimax-h3-t4",
         GPU_SELECT: str = "0,1",
-        ray_object_store_gb: float = 0.5,
+        ray_object_store_gb: float = 4.0,
         load_after: Any | None = None,
         *,
         manage_parent_memory: bool = True,
         interrupt_checker: Any | None = None,
         force_on_failure: bool = False,
     ) -> tuple[H3T4ActorGroup]:
-        if not 0.1 <= float(ray_object_store_gb) <= 1.0:
-            raise ValueError("ray_object_store_gb must be between 0.1 and 1.0 GiB")
+        if not 4.0 <= float(ray_object_store_gb) <= 16.0:
+            raise ValueError("ray_object_store_gb must be between 4.0 and 16.0 GiB")
         selected = [part.strip() for part in GPU_SELECT.split(",") if part.strip()]
         if selected != ["0", "1"]:
             raise ValueError("The exact MiniMax-H3 T4 runtime requires GPU_SELECT='0,1'")
@@ -149,7 +152,7 @@ class H3T4Initializer:
             for rank in range(topology.world_size):
                 if interrupt_checker is not None:
                     interrupt_checker()
-                workers.append(self._create_worker(rank, config))
+                workers.append(self._create_worker(rank, config, ray_module))
             if interrupt_checker is not None:
                 interrupt_checker()
         except BaseException as exc:
