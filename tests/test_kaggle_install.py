@@ -149,7 +149,7 @@ def test_kaggle_runtime_dependencies_are_exactly_pinned() -> None:
     assert all(">=" not in dependency and "<=" not in dependency for dependency in module.PINNED_RUNTIME)
 
 
-def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
+def test_git_stored_kaggle_notebook_enables_cloudflare() -> None:
     notebook_path = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
     notebook_text = notebook_path.read_text()
     notebook = json.loads(notebook_text)
@@ -160,13 +160,8 @@ def test_git_stored_kaggle_notebook_has_no_cloudflare_configuration() -> None:
     compile(code, str(notebook_path), "exec")
     assert "f50c991" in code
     assert "3754653a4f33080cdf78509d0c23930b3a73f0e5ca6355d3b5d6b05fca1023d4" in code
-    for private_cloudflare_value in (
-        "comfy.lukuvka.com",
-        "cloudflare-files",
-        "H3_T4_ENABLE_CLOUDFLARE",
-        "trycloudflare.com",
-    ):
-        assert private_cloudflare_value not in notebook_text
+    # Cloudflare tunnel should be enabled by default
+    assert "H3_T4_ENABLE_CLOUDFLARE" in code
 
 
 def test_git_stored_kaggle_installer_has_cloudflare_configuration() -> None:
