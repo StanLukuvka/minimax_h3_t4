@@ -105,8 +105,11 @@ class H3T4Initializer:
             return self._worker_factory(rank, config)
         from .runtime.worker import H3T4Worker
 
-        actor_class = self._ray.remote(num_gpus=1)(H3T4Worker)
-        return actor_class.options(name=f"H3T4Worker:{rank}").remote(rank, config)
+        # Cap per-worker memory via Ray's memory option
+        max_ram_gb = float(os.environ.get("H3_T4_MAX_RAM_GB", "29"))
+        memory_bytes = int(max_ram_gb * 1024**3)
+        actor_class = self._ray.remote(num_cpus=1, num_gpus=1, memory=memory_bytes)(H3T4Worker)
+        return actor_class.options(name=f"H3T4Worker:{rank}", memory=memory_bytes).remote(rank, config)
 
     def initialize(
         self,
