@@ -35,6 +35,53 @@ def reconstruct_nested_x0(
     return x0
 
 
+# ---------------------------------------------------------------------------
+# Monkey-patch psutil so ComfyUI's MAX_PINNED_MEMORY uses conservative RAM.
+# Kaggle reports 32 GiB but only ~30 GiB is usable; pinning ~12.8 GiB
+# competes with Ray-worker checkpoint loading and triggers OOM kills.
+# ---------------------------------------------------------------------------
+def _patch_psutil() -> None:
+    """Patch ``psutil.virtual_memory`` to report 30 GiB total RAM.
+
+    ComfyUI derives ``MAX_PINNED_MEMORY`` from ``psutil.virtual_memory().total``
+    as ``max(ram * 0.40, min(ram * 0.90, ram - 4GiB))``. Kaggle advertises
+    32 GiB, which pins ~12.8 GiB and starves the Ray workers that need host
+    RAM for INT8 checkpoint loading. Reporting the ~30 GiB that is genuinely
+    usable keeps the pinned-memory budget conservative.
+
+    ``available`` is deliberately reported as equal to ``total``: a low
+    ``available`` makes ComfyUI skip pinned memory entirely, which is worse
+    than a slightly optimistic figure.
+
+    ``psutil`` is imported lazily so this module stays importable without it.
+    """
+    import types
+
+    import psutil
+
+    total = 30 * 1024**3
+    used = 2 * 1024**3
+
+    snapshot = types.SimpleNamespace(
+        total=total,
+        available=total,  # equal to total on purpose; see docstring
+        used=used,
+        free=total - used,
+        percent=round(used / total * 100, 1),
+        active=used,
+        inactive=0,
+        buffers=0,
+        cached=0,
+        shared=0,
+        slab=0,
+    )
+
+    def virtual_memory() -> types.SimpleNamespace:
+        return snapshot
+
+    psutil.virtual_memory = virtual_memory
+
+
 class H3T4Worker:
     """One rank of the fixed two-T4 FSDP + Ulysses MiniMax-H3 runtime."""
 
@@ -53,6 +100,11 @@ class H3T4Worker:
         from xfuser.core.distributed import init_distributed_environment, initialize_model_parallel
 
         from .int8 import require_tesla_t4
+
+        # Kaggle reports 32GB but only has ~30GB usable. Patch psutil so
+        # ComfyUI computes conservative memory budgets and stops trying to
+        # pin into phantom RAM that triggers the Ray OOM killer.
+        _patch_psutil()
 
         self.device = torch.device("cuda:0")
         torch.cuda.set_device(self.device)
