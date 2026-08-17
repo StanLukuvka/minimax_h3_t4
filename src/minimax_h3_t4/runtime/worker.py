@@ -11,9 +11,22 @@ from .diag_logger import log_memory, log_fsdp_shard_state, log_host, log_tensor
 
 
 def validate_worker_config(config: dict[str, object]) -> None:
+    """Validate the topology portion of the worker config.
+
+    Runtime-injected keys (e.g. ``_ray_get``) are ignored — only the fields
+    defined by :class:`ExactH3T4Topology` are compared so callers can layer
+    transport metadata onto the config without breaking the invariant check.
+    """
     expected = ExactH3T4Topology().as_worker_config()
-    if config != expected:
-        raise ValueError(f"MiniMax-H3 worker requires the exact two-T4 topology: {expected!r}")
+    missing = set(expected) - set(config)
+    if missing:
+        raise ValueError(f"MiniMax-H3 worker missing required config keys: {sorted(missing)}")
+    for key, value in expected.items():
+        if config.get(key) != value:
+            raise ValueError(
+                f"MiniMax-H3 worker requires exact two-T4 topology at {key!r}: "
+                f"expected {value!r}, got {config[key]!r}"
+            )
 
 
 def zero_noise_like(samples: Any, torch_module: Any) -> Any:

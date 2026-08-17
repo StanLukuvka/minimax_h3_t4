@@ -51,7 +51,7 @@ def test_worker_rejects_any_topology_drift() -> None:
     }.items():
         drifted = dict(exact)
         drifted[key] = bad_value
-        with pytest.raises(ValueError, match="exact two-T4"):
+        with pytest.raises(ValueError, match="exact two-T4 topology"):
             validate_worker_config(drifted)
 
 
