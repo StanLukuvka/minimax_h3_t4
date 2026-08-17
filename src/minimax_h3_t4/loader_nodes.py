@@ -108,8 +108,11 @@ class H3T4Initializer:
         # Pass ray.get into worker config so it can resolve shared state dict refs
         config = {**config, "_ray_get": ray_module.get}
 
-        # Cap per-worker memory via Ray's memory option
-        max_ram_gb = float(os.environ.get("H3_T4_MAX_RAM_GB", "29"))
+        # Cap per-worker memory via Ray's memory option.
+        # Default 14 GiB: allows ~12 GiB mmap-backed checkpoint + overhead
+        # per worker while keeping 2×worker total under the ~30 GiB host limit.
+        # Override with H3_T4_MAX_RAM_GB env var if needed (e.g. for debugging).
+        max_ram_gb = float(os.environ.get("H3_T4_MAX_RAM_GB", "14"))
         memory_bytes = int(max_ram_gb * 1024**3)
         actor_class = self._ray.remote(num_cpus=1, num_gpus=1, memory=memory_bytes)(H3T4Worker)
         return actor_class.options(name=f"H3T4Worker:{rank}", memory=memory_bytes).remote(rank, config)
