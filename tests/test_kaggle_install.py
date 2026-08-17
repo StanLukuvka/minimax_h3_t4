@@ -158,7 +158,7 @@ def test_git_stored_kaggle_notebook_enables_cloudflare() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "91fa21d" in code
+    assert "e35d2cf" in code
     assert "1e6c40827589cecb5a65a58e7b599eeed0e8626c67263e01aa851ab75a619dbd" in code
     # Cloudflare tunnel should be enabled by default
     assert "H3_T4_ENABLE_CLOUDFLARE" in code
