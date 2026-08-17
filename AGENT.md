@@ -45,6 +45,8 @@
 2. Workers start successfully
 3. If still OOM, add `H3_T4_MAX_RAM_GB=12` or similar via env override
 
+**UPDATE:** Notebook run confirmed working. `validate_worker_config` fix is live on Kaggle.
+
 ## Recent Fixes (committed & pushed)
 
 | Commit | Description |
