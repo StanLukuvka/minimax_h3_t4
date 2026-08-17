@@ -164,6 +164,32 @@ def test_git_stored_kaggle_notebook_enables_cloudflare() -> None:
     assert "H3_T4_ENABLE_CLOUDFLARE" in code
 
 
+def test_notebook_hash_matches_actual_installer() -> None:
+    """The notebook's expected SHA256 must match the real installer on disk."""
+    import hashlib
+
+    notebook_path = SCRIPT.with_name("minimax_h3_t4_kaggle.ipynb")
+    notebook = json.loads(notebook_path.read_text())
+    code = "".join(notebook["cells"][1]["source"])
+
+    # Extract the expected hash from the notebook code
+    actual_expected: str | None = None
+    for line in code.splitlines():
+        if line.strip().startswith('expected ='):
+            actual_expected = line.split('"')[1]
+            break
+
+    assert actual_expected is not None, "Could not find 'expected' hash in notebook code"
+
+    # Compute the real hash of the installer file
+    real_hash = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
+
+    assert actual_expected == real_hash, (
+        f"Notebook expects {actual_expected}, but installer file is {real_hash}\n"
+        f"Update the notebook's 'expected' value or re-commit kaggle_install.py"
+    )
+
+
 def test_git_stored_kaggle_installer_has_cloudflare_configuration() -> None:
     source = SCRIPT.read_text().lower()
     assert "cloudflare" in source
