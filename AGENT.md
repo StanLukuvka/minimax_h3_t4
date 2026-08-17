@@ -16,29 +16,43 @@
 
 ## Current State
 
-**Head commit:** `d04f5541fce452d1c8b4f60afb1cc5004c0ead3b`
+**Head commit:** `156c6c6` (see Recent Fixes)
 **Branch:** `main`
 **Repo:** `https://github.com/StanLukuvka/minimax_h3_t4`
 **Working dir:** `/agent/projects/minimax-h3 project/minimax_h3_t4`
 
-**Pinned installer SHA256:** `5f35a87254d215cff7c28fb6e0b3cc938ebe74904f801758c99c6177b55182e5`
+**Pinned installer SHA256:** `14a56d60e7723d22f55e5c77a797191d338a56f7318e37ea729e1de6f5d9f560`
 
-**Tests:** 110/110 passing
+**Tests:** 116/116 passing
+
+**Notebook pin:** `4c037c4` → `kaggle_install.py` → `EXTENSION_REF=e35d2cf`
 
 ## Blocker
 
-**Host-RAM OOM during `load_unet`:**
-- Ray 2.56 OOM killer fires at 95% of 30GB host RAM (28.56GB threshold)
-- Worker 0 peaks at 24.46GB during checkpoint load
-- Both workers killed simultaneously
+**PAST: `_ray_get` config validation bug (FIXED in `e35d2cf`):**
+- `loader_nodes.py` injects `_ray_get` into worker config dict
+- `validate_worker_config` did strict equality → rejected every worker
+- Result: `ActorDiedError` at `H3T4Worker.__init__()` before any model loading
+- Fix: changed to per-key validation that ignores runtime-injected keys
 
-**Root cause:** Each worker independently loads the full ~12GB INT8 checkpoint into host RAM, then builds a `full_state` copy for FSDP sharding. Two workers = ~24GB peak.
+**PAST: Host-RAM OOM (PARTIALLY FIXED in `78bed33`):**
+- 29 GiB per worker × 2 = 58 GiB > 30 GiB host → Ray rejected 2nd worker
+- Fixed by lowering default `H3_T4_MAX_RAM_GB` to 14 GiB
+- Still needs validation: host RAM is tight (~30 GiB usable), 2×14 = 28 GiB leaves ~2 GiB for Ray overhead
+
+**NEXT:** User must re-run notebook with pin `4c037c4` (which bundles `EXTENSION_REF=e35d2cf`). After that, confirm:
+1. No `validate_worker_config` error in errror.txt
+2. Workers start successfully
+3. If still OOM, add `H3_T4_MAX_RAM_GB=12` or similar via env override
 
 ## Recent Fixes (committed & pushed)
 
 | Commit | Description |
 |--------|-------------|
-| `d04f554` | Cap Ray worker memory via `H3_T4_MAX_RAM_GB=29` env var |
+| `e35d2cf` | Fix `validate_worker_config` — ignore runtime-injected `_ray_get` key (was rejecting all workers) |
+| `78bed33` | Cap per-worker Ray memory to 14 GiB default (29 GiB × 2 > 30 GiB host) |
+| `afb54e1` | Add host-RAM RSS diagnostics via `log_host()` in diag_logger + worker |
+| `d04f554` | Cap Ray worker memory via `H3_T4_MAX_RAM_GB` env var |
 | `284b2ee` | Single-load checkpoint broadcast — load once, share via Ray Object Store |
 | `4063ac7` | Free checkpoint after model loads (`del state_dict` to halve CPU RAM peak) |
 | `2a53db5` | FSDP CPU-direct offload (no GPU transient spike) |
@@ -78,7 +92,30 @@ In `stanlukuvka/minimax-h3-comfyui-weights`:
 - venv python3.12
 - Pinned: `transformers==5.0.0`, `kernels==0.14.0`, `ray==2.56.1`, `xfuser`, `yunchang`
 
-## Key Technical Details
+## Workflow Rule: Verify Kaggle Notebook Is Actually Updated
+
+**Never tell the user a fix is "done" or "live on Kaggle" until you have confirmed the notebook pin points at a commit that contains the fix.**
+
+This project ships fixes through a pin chain that is easy to get wrong:
+
+```
+notebook (pin) → kaggle_install.py (fetched by hash) → EXTENSION_REF (cloned + installed)
+```
+
+A change to `src/minimax_h3_t4/runtime/*.py` is NOT live until:
+1. The change is committed and pushed.
+2. If the change is in the **extension** (runtime code), the notebook's `EXTENSION_REF`
+   default in `kaggle_install.py` points at the fix commit (or is over-ridden via env).
+3. The notebook `.ipynb` pin URL and its hardcoded SHA256 `expected` both point at the
+   commit that ships the updated `kaggle_install.py`.
+4. `tests/test_kaggle_install.py` assertions match the new pin/checksum/EXTENSION_REF.
+5. `uv run --with pytest pytest -q` is green.
+
+After any of the above changes, **re-read the notebook `.ipynb` from disk** and print the
+resolved `url` + `expected` lines to confirm the pin is what you intended. A mismatch here
+caused a silent "already fixed" claim while the user was still running the old broken installer.
+
+Do not declare a Kaggle-side fix complete on the basis of a local commit alone.
 
 - **Ray OOM-kill policy change (2.56):** kills MULTIPLE workers, selected by time-since-task-start
 - **Legacy single-worker policy:** `RAY_worker_killing_policy_by_group=true`
