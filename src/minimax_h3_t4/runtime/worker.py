@@ -7,6 +7,7 @@ from typing import Any
 
 from .checkpoint import load_int8_checkpoint_mmap, normalize_state_dict_prefix, require_int8_state_dict
 from .topology import ExactH3T4Topology
+from .diag_logger import log_memory, log_fsdp_shard_state, log_tensor
 
 
 def validate_worker_config(config: dict[str, object]) -> None:
@@ -148,8 +149,10 @@ class H3T4Worker:
         # RAM peak on constrained Kaggle hosts.
         import comfy.utils as _cu
         _cu.MMAP_TORCH_FILES = True
+        log_memory("load_unet_start", extra={"cpu_offload": cpu_offload})
         state_dict, metadata = load_int8_checkpoint_mmap(path)
         require_int8_state_dict(state_dict)
+        log_memory("after_checkpoint_load", extra={"num_tensors": len(state_dict)})
         prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
         state_dict = normalize_state_dict_prefix(state_dict, prefix)
         state_dict, metadata = comfy.utils.convert_old_quants(state_dict, "", metadata=metadata)
@@ -169,6 +172,7 @@ class H3T4Worker:
         del state_dict
         gc.collect()
         torch.cuda.empty_cache()
+        log_memory("after_model_init", extra={"model_params": sum(p.numel() for p in model.parameters())})
         local_model_size = max(1, comfy.model_management.module_size(model) // 2)
         from .patcher import h3_fsdp_patcher_class
 
@@ -178,6 +182,7 @@ class H3T4Worker:
             patcher.model_state_dict(filter_prefix="diffusion_model."),
             "diffusion_model.",
         )
+        log_memory("before_fsdp_shard", extra={"full_state_keys": len(full_state)})
         diffusion = model.diffusion_model
         diffusion.to("meta")
         fsdp_kwargs: dict[str, Any] = {"mesh": self.device_mesh, "reshard_after_forward": True}
@@ -190,6 +195,7 @@ class H3T4Worker:
             fsdp_kwargs=fsdp_kwargs,
             native_ignore_scale=False,
         )
+        log_fsdp_shard_state(diffusion, "post_shard")
         load_from_full_model_state_dict(
             diffusion,
             full_state,
@@ -198,6 +204,7 @@ class H3T4Worker:
             cpu_offload=cpu_offload,
             release_sd=True,
         )
+        log_memory("after_fsdp_materialize", extra={"cpu_offload": cpu_offload})
         inject_minimax_h3_ulysses(
             patcher,
             minimax_h3_class=MiniMaxH3,
@@ -206,6 +213,7 @@ class H3T4Worker:
         )
         gc.collect()
         torch.cuda.empty_cache()
+        log_memory("load_unet_complete")
         self.model = patcher
         return True
 
@@ -345,6 +353,10 @@ class H3T4Worker:
 
         if self.model is None:
             raise RuntimeError("MiniMax-H3 model is not loaded")
+        log_memory("sample_start", extra={
+            "latent_shape": list(latent.get("samples", {}).shape if hasattr(latent.get("samples"), "shape") else []),
+            "sigmas_len": len(sigmas) if sigmas is not None else 0,
+        })
         if guider_spec.get("type") != "basic":
             raise ValueError("Only the MiniMax-H3 basic guider is supported")
 

@@ -25,6 +25,15 @@ from xfuser.core.distributed import get_sequence_parallel_rank, get_sequence_par
 from .attention import make_ulysses_attention
 from .memory_trace import memory_snapshot as _mem_snapshot, memory_trace_enabled as _trace_enabled
 from .utils import pad_to_world_size
+from .diag_logger import (
+    log_memory,
+    log_tensor,
+    log_attention_memory,
+    log_ulysses_alltoall,
+    profile_start,
+    profile_end,
+    log_fsdp_shard_state,
+)
 
 
 xfuser_optimized_attention = make_ulysses_attention("TORCH_EFFICIENT", False)
@@ -98,6 +107,7 @@ def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     phase_end = mark_phase()
     if trace_this_attention:
         h3_memory_snapshot("h3_attention_after_qkv", local_rows=sequence_length, heads=self.heads, head_dim=self.head_dim)
+        log_memory("after_qkv_proj", extra={"q_bytes": q.numel() * q.element_size(), "k_bytes": k.numel() * k.element_size(), "v_bytes": v.numel() * v.element_size()})
     if profile_this_attention:
         phase_events.append(("qkv_projection", phase_start, phase_end))
     phase_start = mark_phase()
@@ -129,10 +139,22 @@ def h3_ulysses_attention(self, x, rope_freqs=None, transformer_options={}):
     phase_start = mark_phase()
     if trace_this_attention:
         h3_memory_snapshot("h3_attention_before_ulysses", local_rows=sequence_length)
+        log_memory("before_ulysses", extra={
+            "q_shape": list(q.shape),
+            "k_shape": list(k.shape),
+            "v_shape": list(v.shape),
+            "q_bytes": q.numel() * q.element_size(),
+            "k_bytes": k.numel() * k.element_size(),
+            "v_bytes": v.numel() * v.element_size(),
+        })
+        log_attention_memory(q, k, v, "pre_alltoall")
+    # All-to-all communication for Ulysses
+    log_ulysses_alltoall(tuple(q.shape), tuple(q.shape), "pre_attention")
     out = xfuser_optimized_attention(q, k, v, self.heads, skip_reshape=True)
     phase_end = mark_phase()
     if trace_this_attention:
         h3_memory_snapshot("h3_attention_after_ulysses", local_rows=sequence_length)
+        log_memory("after_ulysses", extra={"out_bytes": out.numel() * out.element_size()})
     if profile_this_attention:
         phase_events.append(("ulysses_attention", phase_start, phase_end))
         h3_memory_snapshot("h3_attention_after_ulysses", local_rows=sequence_length)
@@ -303,6 +325,7 @@ def h3_ulysses_forward(self, x, timestep, context, transformer_options={}, minim
     del img_update, audio_update, payload, minimax_payload
     if trace_this_forward:
         h3_memory_snapshot("h3_after_split_release", local_rows=h.shape[0])
+    log_memory("after_embed_release", extra={"local_seq_len": h.shape[0]})
 
     # One owner chooses exact block execution or a synchronized Spectrum forecast.
     patches_replace = transformer_options.get("patches_replace", {})
@@ -314,6 +337,7 @@ def h3_ulysses_forward(self, x, timestep, context, transformer_options={}, minim
             if trace_this_forward:
                 torch.cuda.reset_peak_memory_stats()
                 h3_memory_snapshot("h3_block_start", block=i, local_rows=hidden.shape[0])
+                log_memory(f"block_{i}_start", extra={"local_seq_len": hidden.shape[0]})
             comfy.model_prefetch.prefetch_queue_pop(prefetch_queue, device, block)
             if trace_this_forward:
                 h3_memory_snapshot("h3_block_after_prefetch", block=i, local_rows=hidden.shape[0])
