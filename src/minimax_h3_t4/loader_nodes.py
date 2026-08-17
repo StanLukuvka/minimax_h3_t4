@@ -216,31 +216,14 @@ class H3T4UNETLoader:
         if manage_parent_memory:
             _release_conditioning(self._model_management or _model_management())
         path = self._path_resolver(unet_name)
-        
-        # Load checkpoint once in main process to avoid double RAM allocation
-        from .runtime.checkpoint import load_int8_checkpoint_mmap, require_int8_state_dict
-        import torch
 
-        # Allow tests to mock checkpoint loading via environment variable
-        _fake_state_dict = os.environ.get("H3_T4_TEST_FAKE_STATE_DICT")
-        if _fake_state_dict == "1":
-            state_dict = {
-                "fake_key": torch.zeros(1),
-                "fake_key.comfy_quant": "int8_tensorwise",
-            }
-            metadata = {}
-        else:
-            state_dict, metadata = load_int8_checkpoint_mmap(path)
-            require_int8_state_dict(state_dict)
-
-        # Broadcast state dict to Ray Object Store (shared memory)
+        # Broadcast checkpoint path to workers
+        # Each worker mmaps the same file independently — no main-process RAM peak,
+        # no Ray Object Store copy. Peak RAM is ~20GB per worker (mmap-backed).
         ray_module = actor_group.ray_module
-        state_ref = ray_module.put(state_dict)
-
         try:
-            # Load sequentially - each worker streams keys from shared state dict
             for worker in actor_group.workers:
-                ref = remote(worker, "load_unet_from_state_dict", state_ref, "int8")
+                ref = remote(worker, "load_unet", path, "int8")
                 if interrupt_checker is None:
                     resolve(ray_module, ref)
                 else:
@@ -252,12 +235,7 @@ class H3T4UNETLoader:
                 add_note = getattr(exc, "add_note", None)
                 if callable(add_note):
                     add_note(f"Secondary worker teardown failure: {type(close_exc).__name__}: {close_exc}")
-            finally:
-                try:
-                    ray_module.wait([state_ref], timeout=5)
-                except Exception:
-                    pass
             raise
-            
+
         actor_group.checkpoint = path
         return (actor_group,)
