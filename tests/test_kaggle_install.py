@@ -103,7 +103,7 @@ def test_kaggle_installer_defaults_to_the_published_accepted_extension(monkeypat
     monkeypatch.delenv("H3_T4_EXTENSION_REF", raising=False)
     module = load_script()
     assert module.EXTENSION_REPO == "https://github.com/StanLukuvka/minimax_h3_t4.git"
-    assert module.EXTENSION_REF == "ff6e27bbd64981ae13a98afbb8aa95f9174d022b"
+    assert module.EXTENSION_REF == "2c7e66a4c661447606fa82f71b9b07fc6d6b77c9"
 
 
 def test_kaggle_installer_bootstraps_dedicated_app_python(monkeypatch, tmp_path: Path) -> None:
@@ -158,8 +158,8 @@ def test_git_stored_kaggle_notebook_enables_cloudflare() -> None:
     assert len(code_cells) == 1
     code = "".join(code_cells[0]["source"])
     compile(code, str(notebook_path), "exec")
-    assert "f50c991" in code
-    assert "3754653a4f33080cdf78509d0c23930b3a73f0e5ca6355d3b5d6b05fca1023d4" in code
+    assert "aa60e03" in code
+    assert "95dff37d26466812be9473cc577d72ca85999404a9250979c45bb4ade3e415c0" in code
     # Cloudflare tunnel should be enabled by default
     assert "H3_T4_ENABLE_CLOUDFLARE" in code
 
