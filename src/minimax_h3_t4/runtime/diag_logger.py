@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -141,6 +142,56 @@ def profile_end(label: str, start: float) -> float:
     elapsed = time.perf_counter() - start
     print(f"[{_ts()}] PROFILE {label}: {elapsed * 1000:.1f}ms", flush=True)
     return elapsed
+
+
+def _get_host_rss_bytes() -> int:
+    """Return the current process RSS in bytes.
+
+    Uses ``psutil`` when available (preferred) and falls back to
+    ``/proc/self/status`` on Linux so the module stays importable without
+    dependencies when psutil is absent.
+    """
+    try:
+        import psutil
+
+        pid = os.getpid()
+        process = psutil.Process(pid)
+        return process.memory_info().rss
+    except ImportError:
+        pass
+    proc_status = Path("/proc/self/status")
+    if proc_status.is_file():
+        text = proc_status.read_text()
+        for line in text.splitlines():
+            if line.startswith("VmRSS:"):
+                parts = line.split()
+                if len(parts) == 3 and parts[1].lower() == "kb":
+                    try:
+                        return int(parts[2]) * 1024
+                    except ValueError:
+                        pass
+    return -1
+
+
+def log_host(tag: str, extra: dict[str, Any] | None = None) -> None:
+    """Log host-process RSS memory at the current point.
+
+    No-op when ``H3_T4_DIAG`` is disabled.  Uses psutil when available and
+    falls back to ``/proc/self/status`` on Linux.  Never imports psutil at
+    module load time so the diagnostic submodule remains importable in
+    environments that lack psutil.
+    """
+    if not _DIAG_ENABLED:
+        return
+    rss_bytes = _get_host_rss_bytes()
+    parts = [
+        f"[{_ts()}] rank={_rank()} HOST tag={tag}",
+        f"  rss={rss_bytes / 1024**3:.2f}GiB" if rss_bytes >= 0 else "  rss=unavailable",
+    ]
+    if extra:
+        for k, v in extra.items():
+            parts.append(f"  {k}={v}")
+    print(" \n".join(parts), flush=True)
 
 
 def write_summary(filepath: str, data: dict[str, Any]) -> None:

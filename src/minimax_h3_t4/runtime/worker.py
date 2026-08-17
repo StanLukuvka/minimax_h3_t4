@@ -7,7 +7,7 @@ from typing import Any
 
 from .checkpoint import load_int8_checkpoint_mmap, normalize_state_dict_prefix, require_int8_state_dict
 from .topology import ExactH3T4Topology
-from .diag_logger import log_memory, log_fsdp_shard_state, log_tensor
+from .diag_logger import log_memory, log_fsdp_shard_state, log_host, log_tensor
 
 
 def validate_worker_config(config: dict[str, object]) -> None:
@@ -150,9 +150,11 @@ class H3T4Worker:
         import comfy.utils as _cu
         _cu.MMAP_TORCH_FILES = True
         log_memory("load_unet_start", extra={"cpu_offload": cpu_offload})
+        log_host("load_unet_start")
         state_dict, metadata = load_int8_checkpoint_mmap(path)
         require_int8_state_dict(state_dict)
         log_memory("after_checkpoint_load", extra={"num_tensors": len(state_dict)})
+        log_host("after_checkpoint_load")
         prefix = comfy.model_detection.unet_prefix_from_state_dict(state_dict)
         state_dict = normalize_state_dict_prefix(state_dict, prefix)
         state_dict, metadata = comfy.utils.convert_old_quants(state_dict, "", metadata=metadata)
@@ -173,6 +175,7 @@ class H3T4Worker:
         gc.collect()
         torch.cuda.empty_cache()
         log_memory("after_model_init", extra={"model_params": sum(p.numel() for p in model.parameters())})
+        log_host("after_model_init")
         local_model_size = max(1, comfy.model_management.module_size(model) // 2)
         from .patcher import h3_fsdp_patcher_class
 
@@ -183,6 +186,7 @@ class H3T4Worker:
             "diffusion_model.",
         )
         log_memory("before_fsdp_shard", extra={"full_state_keys": len(full_state)})
+        log_host("before_fsdp_shard")
         diffusion = model.diffusion_model
         diffusion.to("meta")
         fsdp_kwargs: dict[str, Any] = {"mesh": self.device_mesh, "reshard_after_forward": True}
@@ -205,6 +209,7 @@ class H3T4Worker:
             release_sd=True,
         )
         log_memory("after_fsdp_materialize", extra={"cpu_offload": cpu_offload})
+        log_host("after_fsdp_materialize")
         inject_minimax_h3_ulysses(
             patcher,
             minimax_h3_class=MiniMaxH3,
@@ -214,6 +219,7 @@ class H3T4Worker:
         gc.collect()
         torch.cuda.empty_cache()
         log_memory("load_unet_complete")
+        log_host("load_unet_complete")
         self.model = patcher
         return True
 
